@@ -90,4 +90,5 @@ Written by Wael. Released under the MIT licence, see `LICENSE`.
 Third party code is vendored under `loader/third_party/` and `plugin/include/`: the zstd decompressor, miniz and
 the REFramework plugin API. See `THIRD_PARTY.md` for their licences.
 
-This project ships no game data of any kind. Street Fighter 6 is a trademark of Capcom.
+This repository ships no game data: the tables the loader needs are generated from your own installation,
+and the release archive carries a prebuilt copy of them. Street Fighter 6 is a trademark of Capcom.
