@@ -1,0 +1,10 @@
+*.obj
+*.exe
+*.exp
+*.lib
+*.dll
+*.pdb
+__pycache__/
+test_out/
+out/
+*.zip
