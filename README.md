@@ -7,6 +7,13 @@ outfit back, so Outfit 1 and the mod live side by side in the costume spinner.
 Install it once. After that nothing changes in how you use the game: install costume mods the way you already
 do, start the game, and the new outfits are there.
 
+## Install
+
+Grab the archive from [Releases](https://github.com/Wael3rd/SF6-CostumeSlotsLoader/releases), install it in
+Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
+REFramework in `dinput8.dll`, official build 1.5.8 or newer. Costume mods can also be dropped straight into
+`reframework\costume_mods\<Character>\<Costume name>\`, as a `natives` tree or a `.pak`.
+
 ## How it works
 
 The game imports `amd_ags_x64.dll` from its own folder, so a proxy with that name is mapped into the process
