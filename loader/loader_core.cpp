@@ -933,10 +933,12 @@ static std::vector<ModCostume> detect_mod_costumes(
 
 struct SlotInfo {
     std::string mod_id, fighter_dir, original_folder, new_folder, scene_name;
-    int fighter=0, original_costume_no=0, new_costume_no=0;
-    int record_id=0, manage_id=0;
+    std::string outfit_name;
+    int fighter = 0, original_costume_no = 0, new_costume_no = 0;
+    int record_id = 0, manage_id = 0;
     const ModCostume* mod_costume = nullptr;
 };
+
 
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
@@ -1522,8 +1524,9 @@ static void add_slot_files(PakWriter& writer,
 
     if (streaming_count)
         printf("      %d streaming textures relocated\n", streaming_count);
-    printf("    slot %s/%s (v%02d): %d files, %d patched\n",
-           fd.c_str(), new_f.c_str(), slot.new_costume_no, count, patched);
+        printf("    slot %s/%s (v%02d, %s): %d files, %d patched\n",
+               fd.c_str(), new_f.c_str(), slot.new_costume_no,
+               slot.outfit_name.c_str(), count, patched);
 }
 
 // ============================================================================
@@ -2230,6 +2233,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         pos.record_id = sl.record_id;
         pos.manage_id = sl.manage_id;
         pos.name = std::string("Outfit ") + roman;
+        sl.outfit_name = pos.name;
         registry.possession.push_back(pos);
         printf("  slot: %s/v%02d -> folder %s, record %d, \"%s\"\n",
                sl.fighter_dir.c_str(), sl.new_costume_no,
