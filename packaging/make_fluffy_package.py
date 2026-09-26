@@ -42,12 +42,18 @@ CHARACTERS = [
 CRLF = chr(13) + chr(10)
 
 COSTUME_MODS_TXT = CRLF.join([
-    "Drop costume mods here, one folder per costume:",
+    "Drop costume mods here, exactly as downloaded from Nexus:",
+    "  reframework/costume_mods/<Character>/<the .zip, .7z or .rar file>",
+    "or unpacked, one folder per costume:",
     "  reframework/costume_mods/<Character>/<Costume name>/",
     "",
-    "The folder can hold a 'natives' tree or a .pak file, exactly as downloaded from Nexus.",
-    "Restart the game: each costume becomes an EXTRA outfit slot (Outfit I, II, ...).",
-    "Delete the folder and restart to remove the slot. Fluffy Mod Manager paks work too.",
+    "Nothing to unpack, nothing to convert. Restart the game: each costume becomes an EXTRA",
+    "outfit slot (Outfit I, II, ...). Bundles with several options give one slot per option,",
+    "and add-on options (no gloves, alternative hair...) are combined with their base outfit.",
+    "Delete the file or folder and restart to remove the slot. Fluffy Mod Manager paks work too.",
+    "",
+    "The first launch after adding a large archive takes a few seconds longer: the archive is",
+    "unpacked once into the hidden .cache folder, then reused.",
     "",
 ])
 
@@ -65,7 +71,7 @@ README_TXT = CRLF.join([
     "  reframework/autorun/        Lua script (menus, colours)",
     "  reframework/plugins/        native plugin (online matches)",
     "  reframework/data/           static tables + vanilla costume index",
-    "  reframework/costume_mods/   drop your costume mods here, one folder each",
+    "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
     "",

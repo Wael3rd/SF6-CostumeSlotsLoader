@@ -79,6 +79,7 @@ public:
         std::vector<uint8_t> blob;
         int64_t              attributes;
         int64_t              decompressed_size;
+        int64_t              alias = -1;   // index of an entry holding identical data, or -1
     };
 
     // Store a pre-compressed blob verbatim (passthrough).
@@ -92,6 +93,17 @@ public:
 
     size_t entry_count() const { return entries_.size(); }
 
+    // Entries whose data was identical to an earlier entry, and the bytes that saved. The pak
+    // stores such data once; both entries point to the same offset. Costume variants built from
+    // one bundle share most of their textures, so this keeps the pak close to the mods' size.
+    size_t dedup_count() const { return dedup_count_; }
+    uint64_t dedup_bytes() const { return dedup_bytes_; }
+
 private:
+    void push(RawEntry e);
+
     std::vector<RawEntry> entries_;
+    std::unordered_map<uint64_t, std::vector<size_t>> by_sig_;
+    size_t dedup_count_ = 0;
+    uint64_t dedup_bytes_ = 0;
 };

@@ -284,14 +284,57 @@ std::vector<uint8_t> PakReader::read(const PakEntry& e) {
 // PakWriter
 // ============================================================================
 
+// Cheap content signature: size, attributes and sampled bytes. Two blobs with the same signature
+// are then compared in full before being shared, so a collision can never merge different data.
+static uint64_t blob_signature(const std::vector<uint8_t>& b, int64_t attrib) {
+    uint64_t h = 1469598103934665603ULL;
+    auto mix = [&](uint8_t c) { h ^= c; h *= 1099511628211ULL; };
+    uint64_t n = b.size();
+    for (int i = 0; i < 8; ++i) mix(uint8_t(n >> (8 * i)));
+    mix(uint8_t(attrib));
+    size_t head = std::min<size_t>(b.size(), 4096);
+    for (size_t i = 0; i < head; ++i) mix(b[i]);
+    size_t tail = std::min<size_t>(b.size(), 4096);
+    for (size_t i = b.size() - tail; i < b.size(); ++i) mix(b[i]);
+    if (b.size() > 8192)
+        for (size_t k = 1; k < 64; ++k) mix(b[(b.size() / 64) * k]);
+    return h;
+}
+
+void PakWriter::push(RawEntry e) {
+    uint64_t sig = blob_signature(e.blob, e.attributes);
+    auto& same = by_sig_[sig];
+    for (size_t idx : same) {
+        const RawEntry& o = entries_[idx];
+        if (o.blob.size() == e.blob.size() && o.attributes == e.attributes
+            && o.decompressed_size == e.decompressed_size
+            && std::memcmp(o.blob.data(), e.blob.data(), e.blob.size()) == 0) {
+            dedup_count_++;
+            dedup_bytes_ += e.blob.size();
+            e.alias = int64_t(idx);
+            e.blob.clear();
+            e.blob.shrink_to_fit();
+            entries_.push_back(std::move(e));
+            return;
+        }
+    }
+    same.push_back(entries_.size());
+    entries_.push_back(std::move(e));
+}
+
 void PakWriter::add_raw(uint64_t hash, std::vector<uint8_t> blob,
                         int64_t attrib, int64_t decompressed_size) {
-    entries_.push_back({hash, std::move(blob), attrib, decompressed_size});
+    RawEntry e;
+    e.hash = hash; e.blob = std::move(blob); e.attributes = attrib;
+    e.decompressed_size = decompressed_size;
+    push(std::move(e));
 }
 
 void PakWriter::add_uncompressed(uint64_t hash, std::vector<uint8_t> data) {
-    int64_t sz = int64_t(data.size());
-    entries_.push_back({hash, std::move(data), 0, sz});
+    RawEntry e;
+    e.hash = hash; e.attributes = 0; e.decompressed_size = int64_t(data.size());
+    e.blob = std::move(data);
+    push(std::move(e));
 }
 
 bool PakWriter::write(const char* path) {
@@ -314,21 +357,30 @@ bool PakWriter::write(const char* path) {
     int64_t data_start = int64_t(sizeof(PakHeader)) + int64_t(n) * ENTRY_SIZE;
     int64_t offset = data_start;
 
-    for (auto& re : entries_) {
+    // Offsets of the entries that own their data; aliases reuse their source's offset and size.
+    std::vector<int64_t> offs(entries_.size(), 0);
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        if (entries_[i].alias >= 0) continue;
+        offs[i] = offset;
+        offset += int64_t(entries_[i].blob.size());
+    }
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        const RawEntry& re = entries_[i];
+        const RawEntry& src = (re.alias >= 0) ? entries_[size_t(re.alias)] : re;
         PakEntryDisk d{};
         d.hash_lower       = uint32_t(re.hash & 0xFFFFFFFF);
         d.hash_upper       = uint32_t(re.hash >> 32);
-        d.offset            = offset;
-        d.compressed_size   = int64_t(re.blob.size());
+        d.offset            = (re.alias >= 0) ? offs[size_t(re.alias)] : offs[i];
+        d.compressed_size   = int64_t(src.blob.size());
         d.decompressed_size = re.decompressed_size;
         d.attributes        = re.attributes;
         d.checksum          = 0;
         std::fwrite(&d, 1, sizeof(d), fp);
-        offset += int64_t(re.blob.size());
     }
 
-    // Blob data
+    // Blob data, once per distinct content
     for (auto& re : entries_) {
+        if (re.alias >= 0) continue;
         std::fwrite(re.blob.data(), 1, re.blob.size(), fp);
     }
 

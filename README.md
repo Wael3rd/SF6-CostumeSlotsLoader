@@ -11,8 +11,24 @@ do, start the game, and the new outfits are there.
 
 Grab the archive from [Releases](https://github.com/Wael3rd/SF6-CostumeSlotsLoader/releases), install it in
 Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
-REFramework in `dinput8.dll`, official build 1.5.8 or newer. Costume mods can also be dropped straight into
-`reframework\costume_mods\<Character>\<Costume name>\`, as a `natives` tree or a `.pak`.
+REFramework in `dinput8.dll`, official build 1.5.8 or newer.
+
+Costume mods can also go straight into `reframework\costume_mods\<Character>\`, **as downloaded**: the
+`.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
+unpack, nothing to convert.
+
+## Archives, bundles and add-ons
+
+- **Archives** are recognised by their content, not their name, and unpacked once into the hidden
+  `costume_mods\.cache` folder, then reused until the archive changes. Only what the game needs is
+  kept. The first launch after adding a large archive takes a few extra seconds; the next ones don't.
+- **Bundles**: an archive or folder holding several options gives one outfit slot per option.
+- **Add-ons**: an option that only changes a part (no gloves, other hair, a weapon) is combined with the
+  outfit it completes, the way Fluffy Mod Manager installs them together. The loader reads Fluffy's
+  `addonfor` and bundle names; without them it matches options of the same archive that touch the same
+  outfit. Each outfit gets one variant per add-on, plus one with all of them.
+- Variants share most of their files, and the generated pak stores identical data only once.
+- Broken, password-protected or unrelated archives are skipped and reported in `SF6_CostumeLoader.log`.
 
 ## How it works
 
@@ -87,8 +103,8 @@ REFramework in `dinput8.dll`, official build 1.5.8 or newer.
 
 Written by Wael. Released under the MIT licence, see `LICENSE`.
 
-Third party code is vendored under `loader/third_party/` and `plugin/include/`: the zstd decompressor, miniz and
-the REFramework plugin API. See `THIRD_PARTY.md` for their licences.
+Third party code is vendored under `loader/third_party/` and `plugin/include/`: the zstd decompressor, miniz,
+the LZMA SDK 7z decoder, UnRAR and the REFramework plugin API. See `THIRD_PARTY.md` for their licences.
 
 This repository ships no game data: the tables the loader needs are generated from your own installation,
 and the release archive carries a prebuilt copy of them. Street Fighter 6 is a trademark of Capcom.

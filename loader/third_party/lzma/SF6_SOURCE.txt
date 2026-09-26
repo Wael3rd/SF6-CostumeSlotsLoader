@@ -1,0 +1,2 @@
+LZMA SDK 23.01 (public domain), C/ subset needed by the 7z decoder,
+from https://www.7-zip.org/a/lzma2301.7z . Unmodified.

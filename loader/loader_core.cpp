@@ -7,6 +7,7 @@
 #include "pak.hpp"
 #include "patch.hpp"
 #include "loader_core.hpp"
+#include "archive.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -88,6 +89,10 @@ static std::string int_to_roman(int n) {
 }
 static const char* OLD_TEX_SUFFIXES[] = { "143230113" }; // known old tex versions
 static const int   N_OLD_TEX = 1;
+
+// Part of the fingerprint: change it whenever the loader starts producing a different pak, so
+// that installing a new loader regenerates the pak once even if no mod changed.
+static const char* LOADER_BUILD_ID = "2026-09-26-archives";
 
 // ============================================================================
 // Utility
@@ -933,12 +938,11 @@ static std::vector<ModCostume> detect_mod_costumes(
 
 struct SlotInfo {
     std::string mod_id, fighter_dir, original_folder, new_folder, scene_name;
-    std::string outfit_name;
-    int fighter = 0, original_costume_no = 0, new_costume_no = 0;
-    int record_id = 0, manage_id = 0;
+    std::string outfit_name;   // "Outfit I"... (BrewedVFX: shown in the slot log line)
+    int fighter=0, original_costume_no=0, new_costume_no=0;
+    int record_id=0, manage_id=0;
     const ModCostume* mod_costume = nullptr;
 };
-
 
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
@@ -1524,9 +1528,9 @@ static void add_slot_files(PakWriter& writer,
 
     if (streaming_count)
         printf("      %d streaming textures relocated\n", streaming_count);
-        printf("    slot %s/%s (v%02d, %s): %d files, %d patched\n",
-               fd.c_str(), new_f.c_str(), slot.new_costume_no,
-               slot.outfit_name.c_str(), count, patched);
+    printf("    slot %s/%s (v%02d, %s): %d files, %d patched\n",
+           fd.c_str(), new_f.c_str(), slot.new_costume_no,
+           slot.outfit_name.c_str(), count, patched);
 }
 
 // ============================================================================
@@ -1687,7 +1691,7 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
     std::vector<std::pair<std::wstring, std::wstring>> files_found;
     // Convert mod_dir to wide with \\?\ for long paths
     std::wstring mod_dir_w;
-    if (mod_dir.size() > 240) {
+    if (mod_dir.size() > 2 && mod_dir[1] == ':') {
         mod_dir_w = L"\\\\?\\";
         for (char c : mod_dir) mod_dir_w += (wchar_t)(unsigned char)c;
     } else {
@@ -1720,7 +1724,23 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     };
-    walk_rec(mod_dir_w, "");
+    // Walk only this unit's natives tree: sibling folders can be other options of a bundle.
+    std::wstring natives_name;
+    {
+        WIN32_FIND_DATAW fdn;
+        HANDLE hn = FindFirstFileW((mod_dir_w + L"\\*").c_str(), &fdn);
+        if (hn != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fdn.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+                std::wstring n(fdn.cFileName), l(n);
+                for (auto& c : l) c = towlower(c);
+                if (l == L"natives") { natives_name = n; break; }
+            } while (FindNextFileW(hn, &fdn));
+            FindClose(hn);
+        }
+    }
+    if (natives_name.empty()) walk_rec(mod_dir_w, "");
+    else walk_rec(mod_dir_w + L"\\" + natives_name, w2a(natives_name.c_str()));
 
     // First pass: collect all pak_paths + full_paths, upgrade tex
     struct PakItem { std::string pak_path; std::string full_path; };
@@ -1802,92 +1822,424 @@ static std::string identify_folder_mod(
 }
 
 // Process one mod folder (pak or natives). Returns true if mod found.
-static bool scan_one_mod_folder(
-    const std::string& mod_dir, const std::string& rel_path,
-    const VanillaIndex& inv,
-    std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods_out,
-    std::unordered_map<std::string, ModFileRef>& all_mod_out,
-    std::vector<std::unique_ptr<PakReader>>& pak_readers_out,
-    std::vector<FolderModInfo>& infos_out,
-    std::unordered_map<uint64_t, std::string>& upgraded_tex_out) {
+// ============================================================================
+// Archives dropped in costume_mods (.zip / .7z / .rar)
+// ============================================================================
+// An archive is extracted once into costume_mods\.cache\<key>\ and then handled exactly like a
+// folder. The key comes from the archive's name, size and date, so the extraction is reused until
+// the archive changes; cache folders whose archive is gone are deleted at the next regeneration.
+// Only what the loader can use is extracted: natives trees, paks and nested archives.
 
-    // Check for .pak files
-    WIN32_FIND_DATAA fd_pak;
-    HANDLE hp = FindFirstFileA((mod_dir + "\\*.pak").c_str(), &fd_pak);
-    std::vector<std::string> pak_files;
-    if (hp != INVALID_HANDLE_VALUE) {
-        do {
-            if (!(fd_pak.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-                pak_files.push_back(fd_pak.cFileName);
-        } while (FindNextFileA(hp, &fd_pak));
-        FindClose(hp);
-        std::sort(pak_files.begin(), pak_files.end());
-    }
+static std::string g_archive_cache_root;
+static std::set<std::string> g_archive_cache_used;
 
-    if (!pak_files.empty()) {
-        for (auto& pf : pak_files) {
-            std::string pak_path = mod_dir + "\\" + pf;
-            printf("    pak: %s\n", pf.c_str());
-            auto reader = std::make_unique<PakReader>();
-            if (!reader->open(pak_path.c_str())) continue;
-            printf("    %zu entries\n", reader->entry_count());
+static bool is_archive_name(const std::string& name) {
+    auto l = str_lower(name);
+    return str_ends_with(l, ".zip") || str_ends_with(l, ".7z") || str_ends_with(l, ".rar");
+}
 
-            std::string mod_id = identify_mod_pak(pak_path.c_str());
-            printf("    mod_id: %s\n", mod_id.c_str());
-
-            std::unordered_map<std::string, ModFileRef> known;
-            std::vector<uint64_t> unknown;
-            std::unordered_map<uint64_t, std::string> upgraded_tex;
-            scan_mod_pak(*reader, inv, known, unknown, upgraded_tex);
-            upgraded_tex_out.insert(upgraded_tex.begin(), upgraded_tex.end());
-            printf("    resolved: %zu paths, unattributed: %zu\n",
-                   known.size(), unknown.size());
-
-            auto costumes = detect_mod_costumes(known, inv);
-            for (auto& mc : costumes)
-                printf("    -> %s costume %d (folder %s): %zu files\n",
-                       mc.fighter_dir.c_str(), mc.original_costume_no,
-                       mc.original_folder.c_str(), mc.files_in_folder.size());
-
-            mods_out.push_back({mod_id, std::move(costumes)});
-            all_mod_out.insert(known.begin(), known.end());
-            pak_readers_out.push_back(std::move(reader));
-            infos_out.push_back({rel_path + "/" + pf, pak_path});
-        }
+static bool archive_keep_entry(const std::wstring& p) {
+    std::wstring l(p);
+    for (auto& c : l) c = towlower(c);
+    if (l.rfind(L"natives/", 0) == 0 || l.find(L"/natives/") != std::wstring::npos) return true;
+    // Fluffy's modinfo.ini carries the option names and the add-on links
+    if (l == L"modinfo.ini" || (l.size() > 12 && l.compare(l.size() - 12, 12, L"/modinfo.ini") == 0))
         return true;
+    static const wchar_t* exts[] = { L".pak", L".zip", L".7z", L".rar" };
+    for (auto e : exts) {
+        size_t n = wcslen(e);
+        if (l.size() >= n && l.compare(l.size() - n, n, e) == 0) return true;
     }
+    return false;
+}
 
-    // Natives-based
-    std::wstring mod_dir_w;
-    for (char c : mod_dir) mod_dir_w += (wchar_t)(unsigned char)c;
-    auto natives = find_natives_dir(mod_dir_w);
-    if (natives.empty()) return false;
-
-    int ignored = 0, upgraded = 0;
-    auto mod_files = scan_folder_mod(mod_dir, inv, ignored, upgraded);
-    if (ignored)
-        printf("    %d non-costume files ignored "
-               "(folder mods cannot provide global files)\n", ignored);
-    printf("    %zu costume files\n", mod_files.size());
-
-    if (mod_files.empty()) {
-        printf("    WARN: no costume files found, skipping\n");
-        return false;
+static std::string cache_safe_name(const std::string& n) {
+    std::string s;
+    for (char c : n) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+               || c == '.' || c == '-' || c == '_';
+        s += ok ? c : '_';
+        if (s.size() >= 24) break;
     }
+    return s;
+}
 
-    std::string mod_id = identify_folder_mod(mod_files);
-    printf("    mod_id: %s\n", mod_id.c_str());
+static uint32_t fnv1a32(const std::string& s) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : s) { h ^= c; h *= 16777619u; }
+    return h;
+}
 
-    auto costumes = detect_mod_costumes(mod_files, inv);
+static std::wstring a2w_path(const std::string& s) {
+    int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(n > 0 ? size_t(n - 1) : 0, L'\0');
+    if (n > 1) MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, &w[0], n);
+    return w;
+}
+
+static void delete_tree_w(const std::wstring& dir_in) {
+    std::wstring dir = (dir_in.size() > 2 && dir_in[1] == L':') ? L"\\\\?\\" + dir_in : dir_in;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
+                (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) continue;
+            std::wstring full = dir + L"\\" + fd.cFileName;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                delete_tree_w(full);
+            } else {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+                    SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(full.c_str());
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir.c_str());
+}
+
+// Returns the folder holding the archive's content, or "" when the archive cannot be used.
+static std::string ensure_archive_extracted(const std::string& archive_path) {
+    uint64_t sz = 0, mt = 0;
+    if (!file_stat_long(archive_path, sz, mt)) return {};
+    auto sl = archive_path.rfind('\\');
+    std::string fname = (sl != std::string::npos) ? archive_path.substr(sl + 1) : archive_path;
+    char idbuf[64], key[96];
+    snprintf(idbuf, sizeof(idbuf), ":%llu:%llu", (unsigned long long)sz, (unsigned long long)mt);
+    // "v2": bump when the extraction filter changes, so older cache folders are not reused
+    snprintf(key, sizeof(key), "%s_%08x", cache_safe_name(fname).c_str(),
+             fnv1a32(std::string("v2:") + fname + idbuf));
+    g_archive_cache_used.insert(key);
+    std::string final_dir = g_archive_cache_root + "\\" + key;
+    if (GetFileAttributesA((final_dir + "\\.complete").c_str()) != INVALID_FILE_ATTRIBUTES) {
+        printf("    archive: %s (already extracted)\n", fname.c_str());
+        return final_dir;
+    }
+    if (GetFileAttributesA(g_archive_cache_root.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        CreateDirectoryA(g_archive_cache_root.c_str(), nullptr);
+        SetFileAttributesA(g_archive_cache_root.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    }
+    std::wstring arc_w = a2w_path(archive_path);
+    std::wstring tmp_w = a2w_path(final_dir + ".partial");
+    std::wstring fin_w = a2w_path(final_dir);
+    delete_tree_w(tmp_w);
+    delete_tree_w(fin_w);
+    ArchiveKind kind = archive_sniff(arc_w);
+    if (kind == ArchiveKind::None) {
+        printf("    archive: %s is not a zip, 7z or rar file, ignored\n", fname.c_str());
+        return {};
+    }
+    auto t0 = std::chrono::high_resolution_clock::now();
+    ArchiveResult r = archive_extract(arc_w, tmp_w, archive_keep_entry);
+    double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t0).count();
+    if (!r.ok) {
+        printf("    archive: %s CANNOT be used (%s): %s\n",
+               fname.c_str(), archive_kind_name(kind), r.error.c_str());
+        delete_tree_w(tmp_w);
+        return {};
+    }
+    HANDLE hm = CreateFileW((tmp_w + L"\\.complete").c_str(), GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hm != INVALID_HANDLE_VALUE) CloseHandle(hm);
+    if (!MoveFileExW(tmp_w.c_str(), fin_w.c_str(), 0)) {
+        printf("    archive: %s extracted but its cache folder could not be finalised (error %lu)\n",
+               fname.c_str(), (unsigned long)GetLastError());
+        delete_tree_w(tmp_w);
+        return {};
+    }
+    printf("    archive: %s (%s) extracted in %.0f ms: %d files kept (%.1f MB), %d skipped\n",
+           fname.c_str(), archive_kind_name(kind), ms, r.files_written,
+           r.bytes_written / 1048576.0, r.files_skipped);
+    return final_dir;
+}
+
+static void purge_stale_archive_cache() {
+    if (g_archive_cache_root.empty()) return;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((g_archive_cache_root + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::string> stale;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        std::string n = fd.cFileName;
+        if (n == "." || n == "..") continue;
+        if (!g_archive_cache_used.count(n)) stale.push_back(n);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (auto& n : stale) {
+        delete_tree_w(a2w_path(g_archive_cache_root + "\\" + n));
+        printf("  archive cache: removed %s (archive no longer installed)\n", n.c_str());
+    }
+}
+
+// ============================================================================
+// Mod units: one costume source = one natives tree or one .pak
+// ============================================================================
+// A folder or an archive can hold several options (a bundle). Each natives tree and each .pak is
+// handled as its own costume, so every option becomes its own slot; partial options (hair only,
+// an accessory) are then turned away by the usual partial-costume rule.
+
+struct ModUnit {
+    std::string dir;   // folder holding the natives tree, or the .pak
+    std::string pak;   // .pak file name, empty for a natives tree
+    std::string rel;   // path shown in the log
+};
+
+struct ScanOutputs {
+    const VanillaIndex& inv;
+    std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods_out;
+    std::unordered_map<std::string, ModFileRef>& all_mod_out;
+    std::vector<std::unique_ptr<PakReader>>& pak_readers_out;
+    std::vector<FolderModInfo>& infos_out;
+    std::unordered_map<uint64_t, std::string>& upgraded_tex_out;
+};
+
+// Finds every costume under `dir`. Archives met on the way are extracted and searched too, with
+// two levels of nesting at most; folders are searched four levels deep.
+static void collect_mod_units(const std::string& dir, const std::string& rel,
+                              int depth, int nest, std::vector<ModUnit>& out) {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::string> subdirs, paks, archives;
+    bool has_natives = false;
+    do {
+        std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (str_lower(name) == "natives") has_natives = true;
+            else if (name[0] != '.') subdirs.push_back(name);
+        } else if (str_ends_with(str_lower(name), ".pak")) {
+            paks.push_back(name);
+        } else if (is_archive_name(name)) {
+            archives.push_back(name);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    std::sort(subdirs.begin(), subdirs.end());
+    std::sort(paks.begin(), paks.end());
+    std::sort(archives.begin(), archives.end());
+
+    if (has_natives) out.push_back({dir, "", rel});
+    for (auto& p : paks) out.push_back({dir, p, rel + "/" + p});
+    if (nest < 2) {
+        for (auto& a : archives) {
+            std::string ex = ensure_archive_extracted(dir + "\\" + a);
+            if (!ex.empty()) collect_mod_units(ex, rel + "/" + a, 0, nest + 1, out);
+        }
+    }
+    if (depth < 4)
+        for (auto& sd : subdirs)
+            collect_mod_units(dir + "\\" + sd, rel + "/" + sd, depth + 1, nest, out);
+}
+
+// ============================================================================
+// Units are loaded first, then combined: add-on options (Fluffy "addonfor", or parts of the same
+// bundle) are merged onto the option they complete, the way Fluffy would install them together.
+// ============================================================================
+
+struct UnitFiles {
+    ModUnit u;
+    int source = 0;                      // units coming from the same folder or archive share it
+    std::string name, addonfor, bundle;  // from modinfo.ini (Fluffy), may be empty
+    std::string mod_id, info_path;
+    std::unordered_map<std::string, ModFileRef> files;
+    std::vector<ModCostume> costumes;    // empty: partial option, candidate add-on
+    std::set<std::string> targets;       // costume folders touched, e.g. "esf001/001"
+};
+static std::vector<UnitFiles> g_units;
+static int g_unit_source = 0;
+
+static std::string trim_ws(const std::string& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && (unsigned char)s[a] <= ' ') ++a;
+    while (b > a && (unsigned char)s[b - 1] <= ' ') --b;
+    return s.substr(a, b - a);
+}
+
+static bool eq_ci(const std::string& a, const std::string& b) {
+    return str_lower(trim_ws(a)) == str_lower(trim_ws(b));
+}
+
+static uint64_t fnv1a64(const std::string& s) {
+    uint64_t h = 1469598103934665603ULL;
+    for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; }
+    return h;
+}
+
+static void read_modinfo(const std::string& dir, UnitFiles& uf) {
+    FILE* f = fopen((dir + "\\modinfo.ini").c_str(), "rb");
+    if (!f) return;
+    char line[2048];
+    while (fgets(line, sizeof(line), f)) {
+        std::string l(line);
+        if (l.size() >= 3 && (unsigned char)l[0] == 0xEF && (unsigned char)l[1] == 0xBB
+            && (unsigned char)l[2] == 0xBF) l.erase(0, 3);
+        auto eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = str_lower(trim_ws(l.substr(0, eq)));
+        std::string v = trim_ws(l.substr(eq + 1));
+        if (k == "name") uf.name = v;
+        else if (k == "addonfor") uf.addonfor = v;
+        else if (k == "nameasbundle") uf.bundle = v;
+    }
+    fclose(f);
+}
+
+static void print_costumes(const std::vector<ModCostume>& costumes) {
     for (auto& mc : costumes)
         printf("    -> %s costume %d (folder %s): %zu files\n",
                mc.fighter_dir.c_str(), mc.original_costume_no,
                mc.original_folder.c_str(), mc.files_in_folder.size());
+}
 
-    mods_out.push_back({mod_id, std::move(costumes)});
-    all_mod_out.insert(mod_files.begin(), mod_files.end());
-    infos_out.push_back({rel_path, mod_dir});
+static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
+    const VanillaIndex& inv = o.inv;
+    UnitFiles uf;
+    uf.u = u;
+    uf.source = source;
+    read_modinfo(u.dir, uf);
+
+    if (!u.pak.empty()) {
+        std::string pak_path = u.dir + "\\" + u.pak;
+        printf("    pak: %s\n", u.pak.c_str());
+        auto reader = std::make_unique<PakReader>();
+        if (!reader->open(pak_path.c_str())) {
+            printf("    WARN: cannot open %s, skipping\n", u.pak.c_str());
+            return false;
+        }
+        printf("    %zu entries\n", reader->entry_count());
+        uf.mod_id = identify_mod_pak(pak_path.c_str());
+        std::vector<uint64_t> unknown;
+        std::unordered_map<uint64_t, std::string> upgraded_tex;
+        scan_mod_pak(*reader, inv, uf.files, unknown, upgraded_tex);
+        o.upgraded_tex_out.insert(upgraded_tex.begin(), upgraded_tex.end());
+        printf("    resolved: %zu paths, unattributed: %zu\n", uf.files.size(), unknown.size());
+        o.pak_readers_out.push_back(std::move(reader));   // its files stay readable until the end
+        uf.info_path = pak_path;
+    } else {
+        int ignored = 0, upgraded = 0;
+        uf.files = scan_folder_mod(u.dir, inv, ignored, upgraded);
+        if (ignored)
+            printf("    %d non-costume files ignored "
+                   "(folder mods cannot provide global files)\n", ignored);
+        printf("    %zu costume files\n", uf.files.size());
+        if (uf.files.empty()) {
+            printf("    WARN: no costume files found, skipping\n");
+            return false;
+        }
+        uf.mod_id = identify_folder_mod(uf.files);
+        uf.info_path = u.dir;
+    }
+    printf("    mod_id: %s\n", uf.mod_id.c_str());
+    if (!uf.name.empty()) {
+        std::string extra = uf.addonfor.empty() ? std::string() : "  (add-on for " + uf.addonfor + ")";
+        printf("    name: %s%s\n", uf.name.c_str(), extra.c_str());
+    }
+    uf.costumes = detect_mod_costumes(uf.files, inv);
+    print_costumes(uf.costumes);
+    for (auto& [p, mf] : uf.files) {
+        std::string fd, folder;
+        if (parse_model_folder(p, fd, folder) && folder != "000") uf.targets.insert(fd + "/" + folder);
+    }
+    g_units.push_back(std::move(uf));
     return true;
+}
+
+static bool process_units(const std::vector<ModUnit>& units, const std::string& rel_path,
+                          ScanOutputs& o) {
+    if (units.empty()) {
+        printf("    no natives folder, .pak or usable archive found, skipping\n");
+        return false;
+    }
+    if (units.size() > 1) printf("    %zu options in this mod\n", units.size());
+    int source = ++g_unit_source;
+    bool any = false;
+    for (auto& u : units) {
+        if (units.size() > 1 || u.rel != rel_path) printf("  option: %s\n", u.rel.c_str());
+        if (load_unit(u, source, o)) any = true;
+    }
+    return any;
+}
+
+static bool scan_one_mod_folder(const std::string& mod_dir, const std::string& rel_path,
+                                ScanOutputs& o) {
+    std::vector<ModUnit> units;
+    collect_mod_units(mod_dir, rel_path, 0, 0, units);
+    return process_units(units, rel_path, o);
+}
+
+static bool shares_target(const UnitFiles& a, const UnitFiles& b) {
+    for (auto& t : a.targets) if (b.targets.count(t)) return true;
+    return false;
+}
+
+// Turns the loaded units into costumes. Complete options are used as they are. A partial option
+// is matched to the option it completes, most explicit rule first: its Fluffy "addonfor" name,
+// then the same Fluffy bundle, then the same folder or archive; in every case it must touch the
+// same costume folder (except for the explicit "addonfor" name). Each base then gets one variant
+// per add-on, plus one with all its add-ons when it has several.
+static void finalize_units(ScanOutputs& o) {
+    for (auto& uf : g_units) {
+        if (uf.costumes.empty()) continue;
+        o.mods_out.push_back({uf.mod_id, uf.costumes});
+        o.all_mod_out.insert(uf.files.begin(), uf.files.end());
+        o.infos_out.push_back({uf.u.rel, uf.info_path});
+    }
+
+    std::map<size_t, std::vector<size_t>> addons_of;
+    for (size_t i = 0; i < g_units.size(); ++i) {
+        const auto& a = g_units[i];
+        if (!a.costumes.empty() || a.files.empty()) continue;
+        std::vector<size_t> bases;
+        for (int rule = 0; rule < 3 && bases.empty(); ++rule) {
+            for (size_t j = 0; j < g_units.size(); ++j) {
+                const auto& b = g_units[j];
+                if (b.costumes.empty()) continue;
+                bool hit = false;
+                if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
+                if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
+                if (rule == 2) hit = a.source == b.source && shares_target(a, b);
+                if (hit) bases.push_back(j);
+            }
+        }
+        if (bases.empty()) {
+            printf("\n  add-on %s: no costume it can complete was found, ignored\n", a.u.rel.c_str());
+            continue;
+        }
+        for (auto j : bases) addons_of[j].push_back(i);
+    }
+
+    for (auto& [j, adds] : addons_of) {
+        const auto& b = g_units[j];
+        std::vector<std::vector<size_t>> variants;
+        for (auto a : adds) variants.push_back({a});
+        if (adds.size() >= 2) variants.push_back(adds);
+        for (auto& v : variants) {
+            auto merged = b.files;
+            std::string id_src = b.mod_id;
+            std::string label = b.name.empty() ? b.u.rel : b.name;
+            for (auto a : v) {
+                const auto& ad = g_units[a];
+                for (auto& [pth, mf] : ad.files) merged[pth] = mf;
+                id_src += "+" + ad.mod_id;
+                label += " + " + (ad.name.empty() ? ad.u.rel : ad.name);
+            }
+            char idb[24];
+            snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
+            printf("\n  variant: %s\n", label.c_str());
+            auto costumes = detect_mod_costumes(merged, o.inv);
+            print_costumes(costumes);
+            if (costumes.empty()) continue;
+            printf("    mod_id: %s\n", idb);
+            o.mods_out.push_back({idb, std::move(costumes)});
+            for (auto a : v) o.all_mod_out.insert(g_units[a].files.begin(), g_units[a].files.end());
+            o.infos_out.push_back({b.u.rel + " (with add-ons)", b.info_path});
+        }
+    }
+    g_units.clear();
 }
 
 // Scan <game_dir>/reframework/costume_mods/<Character>/<CostumeName>/
@@ -1906,6 +2258,12 @@ static void scan_costume_mods(
 
     std::string base_dir = game_dir + "\\reframework\\costume_mods";
     if (GetFileAttributesA(base_dir.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    g_archive_cache_root = base_dir + "\\.cache";
+    g_archive_cache_used.clear();
+    g_units.clear();
+    g_unit_source = 0;
+
+    ScanOutputs o{ inv, mods_out, all_mod_out, pak_readers_out, infos_out, upgraded_tex_out };
 
     printf("\nScanning costume_mods in %s...\n", base_dir.c_str());
 
@@ -1913,24 +2271,37 @@ static void scan_costume_mods(
     HANDLE hc = FindFirstFileA((base_dir + "\\*").c_str(), &fd_char);
     if (hc == INVALID_HANDLE_VALUE) return;
 
-    // Collect character dirs sorted
+    // Character folders, plus archives dropped straight into costume_mods
     std::vector<std::pair<std::string, std::string>> char_dirs; // (name, abs_path)
+    std::vector<std::string> root_archives;
     do {
-        if (!(fd_char.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
         if (fd_char.cFileName[0] == '.') continue;
-        char_dirs.push_back({fd_char.cFileName, base_dir + "\\" + fd_char.cFileName});
+        std::string name = fd_char.cFileName;
+        if (fd_char.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            char_dirs.push_back({name, base_dir + "\\" + name});
+        else if (is_archive_name(name))
+            root_archives.push_back(name);
     } while (FindNextFileA(hc, &fd_char));
     FindClose(hc);
     std::sort(char_dirs.begin(), char_dirs.end());
+    std::sort(root_archives.begin(), root_archives.end());
+
+    for (auto& a : root_archives) {
+        printf("\n  archive: %s\n", a.c_str());
+        std::vector<ModUnit> units;
+        std::string ex = ensure_archive_extracted(base_dir + "\\" + a);
+        if (!ex.empty()) collect_mod_units(ex, a, 0, 1, units);
+        process_units(units, a, o);
+    }
 
     for (auto& [char_name, char_dir] : char_dirs) {
-        // Scan costume sub-folders
         WIN32_FIND_DATAA fd_cos;
         HANDLE hco = FindFirstFileA((char_dir + "\\*").c_str(), &fd_cos);
         if (hco == INVALID_HANDLE_VALUE) continue;
 
         std::vector<std::pair<std::string, std::string>> sub_dirs;
-        bool has_direct_pak = false, has_direct_natives = false;
+        std::vector<std::string> archives, direct_paks;
+        bool has_direct_natives = false;
         do {
             if (fd_cos.cFileName[0] == '.') continue;
             std::string name = fd_cos.cFileName;
@@ -1940,27 +2311,45 @@ static void scan_costume_mods(
                 else
                     sub_dirs.push_back({name, char_dir + "\\" + name});
             } else if (str_ends_with(str_lower(name), ".pak")) {
-                has_direct_pak = true;
+                direct_paks.push_back(name);
+            } else if (is_archive_name(name)) {
+                archives.push_back(name);
             }
         } while (FindNextFileA(hco, &fd_cos));
         FindClose(hco);
         std::sort(sub_dirs.begin(), sub_dirs.end());
+        std::sort(archives.begin(), archives.end());
+        std::sort(direct_paks.begin(), direct_paks.end());
 
-        // Process costume sub-folders
+        // Costume folders (unpacked by the user, or Fluffy-style folders)
         for (auto& [cos_name, cos_dir] : sub_dirs) {
             std::string rel = char_name + "/" + cos_name;
             printf("\n  folder: %s\n", rel.c_str());
-            scan_one_mod_folder(cos_dir, rel, inv, mods_out, all_mod_out,
-                                pak_readers_out, infos_out, upgraded_tex_out);
+            scan_one_mod_folder(cos_dir, rel, o);
         }
 
-        // Check for mod directly in char dir (no sub-folder)
-        if (has_direct_natives || has_direct_pak) {
+        // Archives left as downloaded (.zip / .7z / .rar)
+        for (auto& a : archives) {
+            std::string rel = char_name + "/" + a;
+            printf("\n  archive: %s\n", rel.c_str());
+            std::vector<ModUnit> units;
+            std::string ex = ensure_archive_extracted(char_dir + "\\" + a);
+            if (!ex.empty()) collect_mod_units(ex, rel, 0, 1, units);
+            process_units(units, rel, o);
+        }
+
+        // A mod unpacked straight into the character folder (no costume sub-folder)
+        if (has_direct_natives || !direct_paks.empty()) {
             printf("\n  folder: %s (mod directly in character dir)\n", char_name.c_str());
-            scan_one_mod_folder(char_dir, char_name, inv, mods_out, all_mod_out,
-                                pak_readers_out, infos_out, upgraded_tex_out);
+            std::vector<ModUnit> units;
+            if (has_direct_natives) units.push_back({char_dir, "", char_name});
+            for (auto& p : direct_paks) units.push_back({char_dir, p, char_name + "/" + p});
+            process_units(units, char_name, o);
         }
     }
+
+    finalize_units(o);
+    purge_stale_archive_cache();
 }
 
 // ============================================================================
@@ -1969,7 +2358,7 @@ static void scan_costume_mods(
 
 static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                                        const std::vector<FolderModInfo>& folder_infos = {}) {
-    std::string fp;
+    std::string fp = std::string("loader=") + LOADER_BUILD_ID;
     for (auto& pi : mod_paks) {
         WIN32_FILE_ATTRIBUTE_DATA fa;
         if (!GetFileAttributesExA(pi.path.c_str(), GetFileExInfoStandard, &fa)) continue;
@@ -1985,6 +2374,21 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
     }
     // Include costume_mods folder files in fingerprint
     for (auto& fi : folder_infos) {
+        // A loose file (archive or pak dropped in a character folder): its own size and date
+        {
+            WIN32_FILE_ATTRIBUTE_DATA fa0;
+            if (GetFileAttributesExA(fi.abs_path.c_str(), GetFileExInfoStandard, &fa0)
+                && !(fa0.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                uint64_t sz0 = (uint64_t(fa0.nFileSizeHigh) << 32) | fa0.nFileSizeLow;
+                uint64_t mt0 = (uint64_t(fa0.ftLastWriteTime.dwHighDateTime) << 32)
+                             | fa0.ftLastWriteTime.dwLowDateTime;
+                char b0[640];
+                snprintf(b0, sizeof(b0), ";%s:%llu:%llu", fi.rel_path.c_str(),
+                         (unsigned long long)sz0, (unsigned long long)mt0);
+                fp += b0;
+                continue;
+            }
+        }
         // Walk all files in abs_path, include relative path + size + mtime
         std::function<void(const std::string&, const std::string&)> walk;
         walk = [&](const std::string& dir, const std::string& prefix) {
@@ -2111,13 +2515,18 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         HANDLE hc = FindFirstFileA((costume_mods_dir + "\\*").c_str(), &fd_c);
         if (hc != INVALID_HANDLE_VALUE) {
             do {
-                if (!(fd_c.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd_c.cFileName[0] == '.') continue;
+                if (fd_c.cFileName[0] == '.') continue;
                 std::string cd = costume_mods_dir + "\\" + fd_c.cFileName;
+                if (!(fd_c.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    // archive dropped straight into costume_mods
+                    folder_infos.push_back({ std::string(fd_c.cFileName), cd });
+                    continue;
+                }
                 WIN32_FIND_DATAA fd_co;
                 HANDLE hco = FindFirstFileA((cd + "\\*").c_str(), &fd_co);
                 if (hco == INVALID_HANDLE_VALUE) continue;
                 do {
-                    if (!(fd_co.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd_co.cFileName[0] == '.') continue;
+                    if (fd_co.cFileName[0] == '.') continue;   // folders and loose files (archives, paks)
                     folder_infos.push_back({
                         std::string(fd_c.cFileName) + "/" + fd_co.cFileName,
                         cd + "\\" + fd_co.cFileName
@@ -2295,6 +2704,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 9. Write output pak
     writer.write(target_path.c_str());
     logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
+    if (writer.dedup_count())
+        logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
+             writer.dedup_count(), writer.dedup_bytes() / 1048576.0);
 
     // 10. Save registry with fingerprint
     registry.fingerprint = new_fp;
