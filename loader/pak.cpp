@@ -204,15 +204,16 @@ std::vector<uint8_t> PakReader::read_raw(const PakEntry& e) {
 }
 
 std::vector<uint8_t> PakReader::read(const PakEntry& e) {
-    auto raw = read_raw(e);
-    int comp = e.compression();
+    return pak_decompress(read_raw(e), e.compression(), e.decompressed_size);
+}
 
+std::vector<uint8_t> pak_decompress(std::vector<uint8_t> raw, int comp, int64_t decompressed_size) {
     // Uncompressed
-    if (comp == 0 || int64_t(raw.size()) == e.decompressed_size) {
+    if (comp == 0 || int64_t(raw.size()) == decompressed_size) {
         return raw;
     }
 
-    std::vector<uint8_t> out(size_t(e.decompressed_size));
+    std::vector<uint8_t> out(static_cast<size_t>(decompressed_size));
 
     // zstd (compression type 2, 0x82, etc.)
     if (comp == 2 || (comp & 0xF) == 2) {
@@ -302,6 +303,7 @@ static uint64_t blob_signature(const std::vector<uint8_t>& b, int64_t attrib) {
 }
 
 void PakWriter::push(RawEntry e) {
+    by_hash_[e.hash] = entries_.size();
     uint64_t sig = blob_signature(e.blob, e.attributes);
     auto& same = by_sig_[sig];
     for (size_t idx : same) {
@@ -320,6 +322,54 @@ void PakWriter::push(RawEntry e) {
     }
     same.push_back(entries_.size());
     entries_.push_back(std::move(e));
+}
+
+const PakWriter::RawEntry* PakWriter::find(uint64_t hash) const {
+    auto it = by_hash_.find(hash);
+    return it == by_hash_.end() ? nullptr : &entries_[it->second];
+}
+
+std::vector<uint8_t> PakWriter::get(uint64_t hash) const {
+    const RawEntry* e = find(hash);
+    if (!e) return {};
+    const RawEntry& src = (e->alias >= 0) ? entries_[size_t(e->alias)] : *e;
+    return pak_decompress(src.blob, int(e->attributes & 0xFF), e->decompressed_size);
+}
+
+const std::vector<uint8_t>* PakWriter::peek(uint64_t hash) const {
+    const RawEntry* e = find(hash);
+    if (!e || (e->attributes & 0xFF) != 0) return nullptr;
+    return (e->alias >= 0) ? &entries_[size_t(e->alias)].blob : &e->blob;
+}
+
+bool PakWriter::replace(uint64_t hash, std::vector<uint8_t> data) {
+    auto it = by_hash_.find(hash);
+    if (it == by_hash_.end()) return false;
+    const size_t i = it->second;
+    RawEntry& e = entries_[i];
+    if (e.alias < 0) {
+        // Other entries may share this entry's data: the first of them takes it over
+        uint64_t sig = blob_signature(e.blob, e.attributes);
+        auto& same = by_sig_[sig];
+        same.erase(std::remove(same.begin(), same.end(), i), same.end());
+        int64_t heir = -1;
+        for (size_t j = 0; j < entries_.size(); ++j) {
+            if (entries_[j].alias != int64_t(i)) continue;
+            if (heir < 0) {
+                heir = int64_t(j);
+                entries_[j].blob = std::move(e.blob);
+                entries_[j].alias = -1;
+                same.push_back(j);
+            } else {
+                entries_[j].alias = heir;
+            }
+        }
+    }
+    e.blob = std::move(data);
+    e.attributes = 0;
+    e.decompressed_size = int64_t(e.blob.size());
+    e.alias = -1;
+    return true;
 }
 
 void PakWriter::add_raw(uint64_t hash, std::vector<uint8_t> blob,
@@ -351,7 +401,7 @@ bool PakWriter::write(const char* path) {
     hdr.features    = 0;
     hdr.count       = n;
     hdr.fingerprint = 0;
-    std::fwrite(&hdr, 1, sizeof(hdr), fp);
+    bool ok = std::fwrite(&hdr, 1, sizeof(hdr), fp) == sizeof(hdr);
 
     // Compute entry table (offsets start after header + table)
     int64_t data_start = int64_t(sizeof(PakHeader)) + int64_t(n) * ENTRY_SIZE;
@@ -375,15 +425,15 @@ bool PakWriter::write(const char* path) {
         d.decompressed_size = re.decompressed_size;
         d.attributes        = re.attributes;
         d.checksum          = 0;
-        std::fwrite(&d, 1, sizeof(d), fp);
+        ok = ok && std::fwrite(&d, 1, sizeof(d), fp) == sizeof(d);
     }
 
     // Blob data, once per distinct content
     for (auto& re : entries_) {
-        if (re.alias >= 0) continue;
-        std::fwrite(re.blob.data(), 1, re.blob.size(), fp);
+        if (re.alias >= 0 || re.blob.empty()) continue;
+        ok = ok && std::fwrite(re.blob.data(), 1, re.blob.size(), fp) == re.blob.size();
     }
 
-    std::fclose(fp);
-    return true;
+    ok = (std::fclose(fp) == 0) && ok;
+    return ok;
 }

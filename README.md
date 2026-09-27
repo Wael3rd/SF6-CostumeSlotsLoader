@@ -39,13 +39,23 @@ before any engine code runs. That is the moment the loader does its work:
    `reframework/costume_mods/`.
 2. It rebuilds a patch pak that relocates each modded costume to a free slot, from 5 to 104, which is
    **100 extra slots per character**, and restores the outfit the mod had overwritten from the base pak.
-3. Colours, physics chains, shared body parts and the `streaming/` high resolution textures follow the costume
-   to its new slot.
-4. It writes a registry that the Lua script and the native plugin read to make the slots selectable and, online,
+3. Colours, physics chains, shared body parts, weapons and the `streaming/` high resolution textures follow the
+   costume to its new slot. Files made before a game update are brought up to date on the way (see below).
+4. It reads every slot back the way the game will load it, repairs what cannot load, and leaves out a slot it
+   cannot repair instead of letting it stall the game. Only the slots in use are declared to the game.
+5. It writes a registry that the Lua script and the native plugin read to make the slots selectable and, online,
    to show the other players a legal outfit.
 
 A fingerprint of the installed mods is kept, so a launch with nothing changed costs about 20 ms. A launch after
-installing a mod costs about a second.
+installing or removing a mod takes a few seconds, up to about fifteen with many large archives.
+
+## Compatibility
+
+Mods published since 2023 were made for older versions of the game. The loader recognises the known
+differences (old texture suffixes, colour files in older layouts, broken texture headers, parts whose
+materials no longer match) and fixes them in its own pak, without touching the mod files.
+[COMPATIBILITY.md](COMPATIBILITY.md) lists what it fixes and the mods tested; [TESTING.md](TESTING.md)
+lists what still needs testing.
 
 Online, the extra slot is aliased to a DriveTech outfit for the other players, so matchmaking stays valid. The
 menus are handled by the Lua script and the match itself by the native plugin, because official REFramework stops
@@ -61,9 +71,9 @@ tools/        generators for the data files, run against your own game installat
 packaging/    builds the distributable zip
 ```
 
-The loader DLL has no hooks, no user interface and no scripting. Its only imports are `kernel32` and `bcrypt`,
-the latter to hash the mod fingerprint. Every AGS export is forwarded to `amd_ags_x64_real.dll`, the genuine AMD
-library that ships with the game.
+The loader DLL has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash the
+mod fingerprint), and `advapi32` and `user32` for the archive decoders; the game has all four loaded already.
+Every AGS export is forwarded to `amd_ags_x64_real.dll`, the genuine AMD library that ships with the game.
 
 ## Building
 

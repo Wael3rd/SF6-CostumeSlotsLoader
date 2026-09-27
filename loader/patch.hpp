@@ -30,9 +30,54 @@ size_t patch_scene_minimal(std::vector<uint8_t>& data,
                            const std::unordered_set<std::string>* relocated_paths,
                            const std::unordered_map<std::string, std::string>* suffixes);
 
-// Minimal mdf2 patching: only repoint textures whose filename is in mod_tex_stems.
+// Minimal mdf2 patching: repoints the texture references that name a texture the mod ships,
+// from fighter_dir/old_folder/ to fighter_dir/new_folder/, and renames the file name the same way
+// relocate_path() renames the file itself (first "<fighter>_<old>_" becomes "<fighter>_<new>_").
+// Rewriting only the folder left references to files that were never written.
+// mod_tex_keys: "<part>/<file>.tex" relative to fighter_dir/old_folder/, lowercase.
 size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
                           std::string_view fighter_dir,
                           std::string_view old_folder,
                           std::string_view new_folder,
-                          const std::unordered_set<std::string>& mod_tex_stems);
+                          const std::unordered_set<std::string>& mod_tex_keys);
+
+// Costume table reduction (fightercostumeuserdata.user.2): keeps every vanilla record and, among the
+// slot records the static table reserves (100 per character, after the root instance), only those
+// whose id is in keep_ids. A character the player does not own lists every record of the table,
+// owned or not, so the reserved ones showed up as empty outfits whose missing scene stalled loading.
+// Returns false and leaves data untouched when the layout is not the expected one.
+bool trim_costume_table(std::vector<uint8_t>& data,
+                        const std::unordered_set<uint32_t>& keep_ids,
+                        size_t* kept_records, size_t* removed_records);
+
+// Type signatures of an RSZ user file (.user): the game refuses an instance whose type CRC is not the
+// one of its current build. A game update can change a type's CRC without changing its layout (an enum
+// that gains values); mod files made before it then load without their data.
+// Reads (type id -> crc) of every instance into out. Returns false if data is not a user file.
+bool user_type_crcs(const std::vector<uint8_t>& data, std::unordered_map<uint32_t, uint32_t>& out);
+// Rewrites to current[type] the CRC of every instance whose type is in `upgradable` and whose CRC
+// differs. Types of `current` left with another CRC are added to stale_left (may be null).
+// Returns the number of instances rewritten.
+size_t upgrade_user_crcs(std::vector<uint8_t>& data,
+                         const std::unordered_map<uint32_t, uint32_t>& current,
+                         const std::unordered_set<uint32_t>& upgradable,
+                         std::unordered_set<uint32_t>* stale_left);
+
+// Costume colour files (cmd_*.user) in the 2023 layout, before app.CostumeMaterialData.Cloth gained
+// ClothFur_Color: converted to the current layout. Every garment gets the fur block the game ships
+// (ShellFurColor + its five values), copied from `reference`, a current colour file of the game, where
+// it is disabled. All instances are then written with the CRCs of `current`.
+// Returns false and leaves data untouched when the file is not an old colour file.
+bool upgrade_costume_material_layout(std::vector<uint8_t>& data,
+                                     const std::unordered_map<uint32_t, uint32_t>& current,
+                                     const std::vector<uint8_t>& reference,
+                                     size_t* garments_upgraded);
+
+// Test hook: parses a colour file and writes it back unchanged. False if the layout is not understood.
+bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<uint8_t>& out);
+
+// Texture mip tables (.tex): every level's row pitch must cover a row of blocks (or pixels) and its
+// size must be pitch x rows, as in all the game's costume textures. With repair, a level whose data is
+// tightly packed but whose pitch is wrong gets the right pitch (counted in *repaired). Returns the
+// number of levels left inconsistent; 0 for a texture of unknown format or not a texture.
+int texture_mip_check(std::vector<uint8_t>& tex, bool repair, int* repaired);

@@ -39,6 +39,10 @@ struct PakEntry {
 // PakReader  --  read-only index over one RE Engine v4 pak
 // ============================================================================
 
+// Decompresses a pak blob (zstd / deflate / stored) given its compression code (attributes & 0xFF)
+// and its decompressed size.
+std::vector<uint8_t> pak_decompress(std::vector<uint8_t> raw, int comp, int64_t decompressed_size);
+
 class PakReader {
 public:
     PakReader() = default;
@@ -89,6 +93,14 @@ public:
     // Store uncompressed data (attrib = 0).
     void add_uncompressed(uint64_t hash, std::vector<uint8_t> data);
 
+    // The entry last added under this hash, its data decompressed, or null / empty.
+    const RawEntry* find(uint64_t hash) const;
+    std::vector<uint8_t> get(uint64_t hash) const;
+    // Data of an entry stored uncompressed, without copy; null otherwise.
+    const std::vector<uint8_t>* peek(uint64_t hash) const;
+    // Replaces the data of an entry (stored uncompressed). Entries that shared its data keep it.
+    bool replace(uint64_t hash, std::vector<uint8_t> data);
+
     bool write(const char* path);
 
     size_t entry_count() const { return entries_.size(); }
@@ -103,6 +115,7 @@ private:
     void push(RawEntry e);
 
     std::vector<RawEntry> entries_;
+    std::unordered_map<uint64_t, size_t> by_hash_;
     std::unordered_map<uint64_t, std::vector<size_t>> by_sig_;
     size_t dedup_count_ = 0;
     uint64_t dedup_bytes_ = 0;

@@ -92,7 +92,7 @@ static const int   N_OLD_TEX = 1;
 
 // Part of the fingerprint: change it whenever the loader starts producing a different pak, so
 // that installing a new loader regenerates the pak once even if no mod changed.
-static const char* LOADER_BUILD_ID = "2026-09-26-archives";
+static const char* LOADER_BUILD_ID = "2026-09-27-texmips-safewrite";
 
 // ============================================================================
 // Utility
@@ -215,7 +215,13 @@ struct VanillaIndex {
                         if (slash != std::string::npos) {
                             std::string folder = ci.model_dir.substr(slash+1);
                             std::string key = ci.fighter_dir + "\t" + folder;
-                            folder_to_costume[key] = costumes.size() - 1;
+                            // A model folder can serve two costumes (Dhalsim: C1 and DriveTech both
+                            // use 001). A mod of that folder is a mod of the lowest costume number;
+                            // keeping the last one made every Dhalsim C1 mod load as DriveTech.
+                            auto prev = folder_to_costume.find(key);
+                            if (prev == folder_to_costume.end()
+                                || ci.costume_no < costumes[prev->second].costume_no)
+                                folder_to_costume[key] = costumes.size() - 1;
                         }
                     }
                 }
@@ -619,6 +625,70 @@ static bool file_stat_long(const std::string& path, uint64_t& size, uint64_t& mt
 }
 
 // ============================================================================
+// Stale type signatures in mod user files
+// ============================================================================
+// A game update changed the CRC of app.CostumeMaterialData.MaterialData (0x4D532A61 -> current)
+// without changing its layout: the colour files (cmd_*.user) of mods made before it are refused by the
+// game, and the costume shows up white, hair included. Measured on DOA4 Christie (Cammy): its cmd_000
+// and cmd_005 are the game's own files byte for byte, CRC aside. The current CRCs are read from a
+// vanilla colour file at each generation; only types whose layout is known to be unchanged are
+// rewritten, the others are reported.
+
+static std::unordered_map<uint32_t, uint32_t> g_current_crc;          // type -> CRC of this game build
+static const std::unordered_set<uint32_t> CRC_UPGRADABLE = {
+    0x9E32F1F4,   // app.CostumeMaterialData.MaterialData: Type (enum ePartsType) + Clusters, unchanged
+};
+static std::unordered_set<std::string> g_crc_upgraded_files;
+static std::unordered_map<uint32_t, std::unordered_set<std::string>> g_crc_stale_files;
+// Colour files of 2023 (Cloth without ClothFur_Color, e.g. KenSFV): converted to the current layout,
+// the fur block copied from this game colour file, where it is disabled.
+static std::vector<uint8_t> g_cmd_reference;
+// Textures whose mip table declared a wrong row pitch (repaired) or stays inconsistent
+static std::unordered_set<std::string> g_tex_repaired_files, g_tex_bad_files;
+static std::unordered_set<std::string> g_layout_upgraded_files;
+
+static const char* type_label(uint32_t t) {
+    switch (t) {
+        case 0x9E32F1F4: return "app.CostumeMaterialData.MaterialData";
+        case 0x9F67268B: return "app.CostumeMaterialData.Cloth";
+        default: return nullptr;
+    }
+}
+
+static void load_current_crcs(PakReader& base_pak) {
+    g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
+    g_cmd_reference.clear(); g_layout_upgraded_files.clear();
+    g_tex_repaired_files.clear(); g_tex_bad_files.clear();
+    const char* ref = "natives/stm/product/model/esf/esf001/001/esf001_001_cmd_000.user.2";
+    if (auto* e = base_pak.find(pak_path_hash(std::string_view(ref)))) {
+        g_cmd_reference = base_pak.read(*e);
+        user_type_crcs(g_cmd_reference, g_current_crc);
+    }
+}
+
+// source: file name for the log (disk path, or the pak entry hash)
+static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& source) {
+    if (data.size() >= 4 && memcmp(data.data(), "TEX\0", 4) == 0) {
+        int fixed = 0;
+        int bad = texture_mip_check(data, true, &fixed);
+        if (fixed) g_tex_repaired_files.insert(source);
+        if (bad) g_tex_bad_files.insert(source);
+        return size_t(fixed);
+    }
+    if (g_current_crc.empty() || data.size() < 4 || memcmp(data.data(), "USR\0", 4) != 0) return 0;
+    size_t garments = 0;
+    if (upgrade_costume_material_layout(data, g_current_crc, g_cmd_reference, &garments)) {
+        g_layout_upgraded_files.insert(source);
+        return garments;
+    }
+    std::unordered_set<uint32_t> stale;
+    size_t n = upgrade_user_crcs(data, g_current_crc, CRC_UPGRADABLE, &stale);
+    if (n > 0) g_crc_upgraded_files.insert(source);
+    for (uint32_t t : stale) g_crc_stale_files[t].insert(source);
+    return n;
+}
+
+// ============================================================================
 // Mod file reference (pak or disk)
 // ============================================================================
 
@@ -629,21 +699,41 @@ struct ModFileRef {
 
     bool is_disk() const { return !disk_path.empty(); }
 
-    // Read decompressed data (from pak or disk)
+    std::string source() const {
+        if (!disk_path.empty()) return disk_path;
+        char buf[32]; sprintf(buf, "pak entry %016llx", (unsigned long long)hash);
+        return buf;
+    }
+
+    // Read decompressed data (from pak or disk). User files come back with current type signatures.
     std::vector<uint8_t> read_data() const {
-        if (!disk_path.empty()) return read_file_long(disk_path);
-        return pak->read(*pak->find(hash));
+        auto d = disk_path.empty() ? pak->read(*pak->find(hash)) : read_file_long(disk_path);
+        upgrade_mod_user(d, source());
+        return d;
     }
 
     // Read raw: returns (blob, attrib, decompressed_size).
     // Disk files -> attrib=0, blob=file content (uncompressed).
+    // A small pak entry is decompressed to check whether it is a user file with a stale signature;
+    // if so it is returned upgraded and uncompressed.
     void read_raw(std::vector<uint8_t>& out, int64_t& attrib, int64_t& dsize) const {
         if (!disk_path.empty()) {
-            out = read_file_long(disk_path);
+            out = read_data();
             attrib = 0; dsize = (int64_t)out.size();
             return;
         }
         auto* e = pak->find(hash);
+        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0) {
+            auto d = pak->read(*e);
+            if (upgrade_mod_user(d, source()) > 0) {
+                out = std::move(d); attrib = 0; dsize = (int64_t)out.size();
+                return;
+            }
+            if ((e->attributes & 0xFF) == 0) {   // stored: what was read is the raw blob
+                out = std::move(d); attrib = e->attributes; dsize = e->decompressed_size;
+                return;
+            }
+        }
         out = pak->read_raw(*e);
         attrib = e->attributes; dsize = e->decompressed_size;
     }
@@ -687,6 +777,17 @@ static int write_streaming_twin(PakWriter& writer,
 // ============================================================================
 
 struct PakInfo { int num; std::string path; };
+
+// Deletes a file, retrying for ~10 s while another process keeps it open. True once it is gone.
+static bool delete_with_retry(const std::string& path) {
+    for (int i = 0; i < 20; i++) {
+        if (DeleteFileA(path.c_str())) return true;
+        DWORD err = GetLastError();
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) return true;
+        Sleep(500);
+    }
+    return false;
+}
 
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
@@ -1030,6 +1131,17 @@ static std::vector<SlotInfo> assign_slots(
 // add_slot_files (minimal mode)
 // ============================================================================
 
+// Original paths of the mod files a slot relocated. A mod-only file that no slot relocated (for
+// instance a texture a DriveTech mod keeps in the C1 folder) must still be written where it is,
+// even when another mod's slot relocates that same folder.
+static std::unordered_set<std::string> g_relocated_mod_paths;
+// Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
+static std::unordered_map<std::string, std::string> g_mod_names;
+static std::string mod_label(const std::string& id) {
+    auto it = g_mod_names.find(id);
+    return it == g_mod_names.end() ? id : it->second;
+}
+
 static void add_slot_files(PakWriter& writer,
                            std::unordered_set<std::string>& written_paths,
                            const SlotInfo& slot,
@@ -1053,16 +1165,30 @@ static void add_slot_files(PakWriter& writer,
         return r;
     };
 
-    // Build mod texture stems for mdf2 patching
-    std::unordered_set<std::string> mod_tex_stems;
-    for (auto& [p2, mf2] : mc->files_in_folder) {
-        auto fn2 = p2.rfind('/');
-        std::string name2 = (fn2 != std::string::npos) ? p2.substr(fn2+1) : p2;
-        if (name2.find(".tex.") != std::string::npos) {
-            auto dot2 = name2.find(".tex.");
-            mod_tex_stems.insert(str_lower(name2.substr(0, dot2 + 4)));
+    // Textures the mod ships, named the way material files reference them: "<part>/<file>.tex"
+    // relative to <fighter>/<folder>/, lowercase.
+    auto tex_keys_for = [&](const std::unordered_map<std::string, ModFileRef>& files,
+                            const std::string& folder) {
+        std::unordered_set<std::string> keys;
+        std::string base = std::string(BASE_PFX) + "model/esf/" + fd + "/" + folder + "/";
+        for (auto& [p2, mf2] : files) {
+            std::string low = str_lower(p2);
+            if (low.compare(0, base.size(), base) != 0) continue;   // product files only
+            auto dot = low.find(".tex.", base.size());
+            if (dot == std::string::npos) continue;
+            keys.insert(low.substr(base.size(), dot + 4 - base.size()));
         }
-    }
+        return keys;
+    };
+    std::unordered_set<std::string> mod_tex_keys = tex_keys_for(mc->files_in_folder, old_f);
+    // Shared 000/ textures shipped by the mod: phase 1c relocates them into the new folder
+    std::unordered_set<std::string> shared_tex_keys = tex_keys_for(mc->files_shared, "000");
+    // Points a material file at the relocated textures of the costume folder and of 000/
+    auto patch_material = [&](std::vector<uint8_t>& d) -> size_t {
+        size_t n = patch_mdf2_minimal(d, fd, old_f, new_f, mod_tex_keys);
+        if (!shared_tex_keys.empty()) n += patch_mdf2_minimal(d, fd, "000", new_f, shared_tex_keys);
+        return n;
+    };
 
     // Relocate mod files
     int streaming_count = 0;
@@ -1091,7 +1217,7 @@ static void add_slot_files(PakWriter& writer,
         if (str_ends_with(low, ".mdf2.31")) {
             auto data = mf.read_data();
             auto vdata = std::vector<uint8_t>(data.begin(), data.end());
-            size_t n = patch_mdf2_minimal(vdata, fd, old_f, new_f, mod_tex_stems);
+            size_t n = patch_material(vdata);
             if (n > 0) patched++;
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
@@ -1106,6 +1232,7 @@ static void add_slot_files(PakWriter& writer,
             writer.add_raw(h, std::move(raw), att, ds);
         }
         written_paths.insert(new_path);
+        g_relocated_mod_paths.insert(path);
         count++;
         if (low.find(".tex.") != std::string::npos && !is_streaming)
             tex_pairs.push_back({path, new_path});
@@ -1114,77 +1241,84 @@ static void add_slot_files(PakWriter& writer,
     for (auto& [orig, np] : tex_pairs)
         streaming_count += write_streaming_twin(writer, written_paths, orig, np, all_mod, base_pak);
 
-    // ---- Phase 1b: vanilla mdf2 relocation if mod has none ----
+    std::vector<std::string> relocated_vanilla_mdf2;   // vanilla materials relocated by phase 1b
+    // ---- Phase 1b: vanilla mdf2 relocation for the parts the mod gives no material ----
+    // Decided per part (01 body, 02 hair, 30 weapon...): a part whose mesh the mod ships without a
+    // material gets the vanilla material of that part, bound to the mod's textures. When the mod ships
+    // no material at all, every vanilla material of the folder is relocated, as before. Deciding for
+    // the whole folder left the body of "outfit + hair add-on" bundles without any material.
     {
-        bool has_mod_mdf2 = false;
-        for (auto& [p, mf] : mc->files_in_folder)
-            if (str_ends_with(str_lower(p), ".mdf2.31")) { has_mod_mdf2 = true; break; }
+        std::string part_base = std::string(BASE_PFX) + "model/esf/" + fd + "/" + old_f + "/";
+        auto part_of = [&](const std::string& p) -> std::string {
+            std::string low = str_lower(p);
+            if (low.compare(0, part_base.size(), part_base) != 0) return {};
+            auto sl = low.find('/', part_base.size());
+            return (sl == std::string::npos) ? std::string() : low.substr(part_base.size(), sl - part_base.size());
+        };
+        std::set<std::string> parts_mesh, parts_mdf2;
+        for (auto& [p, mf] : mc->files_in_folder) {
+            std::string part = part_of(p);
+            if (part.empty()) continue;
+            std::string low = str_lower(p);
+            if (str_ends_with(low, ".mdf2.31")) parts_mdf2.insert(part);
+            else if (low.find(".mesh.") != std::string::npos) parts_mesh.insert(part);
+        }
+        bool has_mod_mdf2 = !parts_mdf2.empty();
+        auto part_needs_vanilla = [&](const std::string& part) {
+            if (parts_mdf2.count(part)) return false;
+            return !has_mod_mdf2 || parts_mesh.count(part) > 0;
+        };
+        bool any_part_needs = !has_mod_mdf2;
+        for (auto& part : parts_mesh) if (part_needs_vanilla(part)) any_part_needs = true;
 
-        if (!has_mod_mdf2) {
+        if (any_part_needs) {
             // Find vanilla mdf2 files for this costume from inventory
             auto* ci = inv.get_costume(slot.fighter, slot.original_costume_no);
             if (ci) {
                 std::string mprefix = inv.model_prefix(fd, old_f);
-                // Collect hashes present in the mod pak for texture matching
-                std::unordered_set<uint64_t> mod_pak_hashes;
-                for (auto& [p2, mf2] : mc->files_in_folder)
-                    mod_pak_hashes.insert(mf2.hash);
-                // Version suffix for tex
-                std::string tex_ver;
-                { auto it2 = inv.suffixes.find("tex"); if (it2 != inv.suffixes.end()) tex_ver = it2->second; }
                 // Scan the vanilla inventory FILES for mdf2s in this costume's folder
                 for (auto& [vh, vpaths] : inv.hash_to_paths) {
                     for (auto& vp : vpaths) {
                         if (vp.size() < mprefix.size()) continue;
                         if (vp.compare(0, mprefix.size(), mprefix) != 0) continue;
                         if (!str_ends_with(str_lower(vp), ".mdf2.31")) continue;
+                        if (!part_needs_vanilla(part_of(vp))) continue;
                         // Found a vanilla mdf2 in this costume's folder
                         std::string new_path = relocate_path(vp, fd, old_f, new_f);
                         if (written_paths.count(new_path)) continue;
                         auto* ve = base_pak.find(vh);
                         if (!ve) continue;
                         auto mdf_data = base_pak.read(*ve);
-                        // Patch: for each tex ref in mdf2, if the tex hash
-                        // exists in the mod pak, replace the dir segment
-                        std::string old_dir_s = fd + "/" + old_f + "/";
-                        std::string new_dir_s = fd + "/" + new_f + "/";
-                        std::vector<uint8_t> old_d16, new_d16;
-                        for (char c : old_dir_s) { old_d16.push_back((uint8_t)c); old_d16.push_back(0); }
-                        for (char c : new_dir_s) { new_d16.push_back((uint8_t)c); new_d16.push_back(0); }
-                        // Scan for old_dir in UTF-16LE, check if the ref's tex hash is in mod
-                        for (size_t i = 0; i + old_d16.size() <= mdf_data.size(); ) {
-                            if (memcmp(mdf_data.data()+i, old_d16.data(), old_d16.size()) != 0)
-                                { i += 2; continue; }
-                            // Read to null terminator to get the full ref
-                            size_t end = i + old_d16.size();
-                            while (end + 1 < mdf_data.size() && !(mdf_data[end]==0 && mdf_data[end+1]==0))
-                                end += 2;
-                            // Decode the ref starting from the dir match
-                            std::string ref;
-                            for (size_t j = i; j < end; j += 2) {
-                                uint16_t ch = mdf_data[j] | (uint16_t(mdf_data[j+1]) << 8);
-                                if (ch == 0) break;
-                                ref += (char)(ch & 0xFF);
-                            }
-                            // Build the pak path for this texture
-                            std::string lref = str_lower(ref);
-                            // ref is like "esf010/002/01/esf010_002_01_clotha_albd.tex"
-                            // pak path = "natives/stm/product/model/esf/" + lref + "." + tex_ver
-                            std::string tex_pak = "natives/stm/product/model/esf/" + lref;
-                            if (!tex_ver.empty()) tex_pak += "." + tex_ver;
-                            uint64_t th = pak_path_hash(std::string_view(tex_pak));
-                            if (mod_pak_hashes.count(th)) {
-                                // This texture is in the mod pak -> patch dir
-                                memcpy(mdf_data.data()+i, new_d16.data(), new_d16.size());
-                            }
-                            i += old_d16.size();
-                        }
+                        // Point the vanilla material at the textures the mod ships (by path:
+                        // folder mods have no pak hash, so matching by hash never fired)
+                        patch_material(mdf_data);
                         uint64_t nh = pak_path_hash(std::string_view(new_path));
                         writer.add_uncompressed(nh, std::move(mdf_data));
                         written_paths.insert(new_path);
+                        relocated_vanilla_mdf2.push_back(vp);
                         count++; patched++;
                     }
                 }
+            }
+            // Parts the index does not list (weapons, props: the costume scene does not name them,
+            // a model_parts file does). Derive the vanilla material from the mod's mesh name.
+            for (auto& [p, mf] : mc->files_in_folder) {
+                std::string low = str_lower(p);
+                auto mpos = low.find(".mesh.");
+                if (mpos == std::string::npos) continue;
+                std::string part = part_of(p);
+                if (part.empty() || !part_needs_vanilla(part)) continue;
+                std::string vp = low.substr(0, mpos) + "_v00.mdf2.31";
+                std::string new_path = relocate_path(vp, fd, old_f, new_f);
+                if (written_paths.count(new_path)) continue;
+                auto* ve = base_pak.find(pak_path_hash(std::string_view(vp)));
+                if (!ve) continue;
+                auto mdf_data = base_pak.read(*ve);
+                patch_material(mdf_data);
+                writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(mdf_data));
+                written_paths.insert(new_path);
+                relocated_vanilla_mdf2.push_back(vp);
+                count++; patched++;
             }
         }
     }
@@ -1402,24 +1536,13 @@ static void add_slot_files(PakWriter& writer,
         std::string part = rest.substr(0, slash);
         std::string new_path = relocate_path(path, fd, "000", new_f);
         if (written_paths.count(new_path)) continue;
+        g_relocated_mod_paths.insert(path);
         shared_parts.insert(part);
         std::string low = str_lower(path);
         if (str_ends_with(low, ".mdf2.31")) {
             auto data = mf.read_data();
             auto vdata = std::vector<uint8_t>(data.begin(), data.end());
-            // Build tex stems for this shared part
-            std::unordered_set<std::string> sh_stems;
-            std::string part_prefix = "/000/" + part + "/";
-            for (auto& [sp, smf] : mc->files_shared) {
-                if (sp.find(part_prefix) == std::string::npos) continue;
-                auto sfn = sp.rfind('/');
-                std::string sname = (sfn != std::string::npos) ? sp.substr(sfn+1) : sp;
-                if (sname.find(".tex.") != std::string::npos) {
-                    auto dot = sname.find(".tex.");
-                    sh_stems.insert(str_lower(sname.substr(0, dot + 4)));
-                }
-            }
-            size_t n = patch_mdf2_minimal(vdata, fd, "000", new_f, sh_stems);
+            size_t n = patch_material(vdata);
             if (n > 0) patched++;
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
@@ -1474,6 +1597,84 @@ static void add_slot_files(PakWriter& writer,
             printf("      %d extra-model files relocated\n", ext_count);
     }
 
+    // ---- Phase 3b: model parts (weapons, props) ----
+    // The costume scene does not name weapon meshes itself: it references
+    // battle_ud/<fd>vNN_model_parts.user, which lists them (Lily's clubs: 001/30 and 001/31).
+    // When the slot relocated such a part, the slot gets its own copy in battle<new>/ (same length
+    // as battle_ud/, so the scene can be patched in place) pointing at the relocated meshes and
+    // materials, and the scene is redirected to that copy below.
+    std::string mp_old_s, mp_new_s;
+    {
+        auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
+        const PakEntry* se0 = (oc && !oc->scene.empty())
+            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+        if (se0) {
+            auto sd = base_pak.read(*se0);
+            std::string needle = fd + "/battle_ud/" + fd + "v";
+            std::vector<uint8_t> n16;
+            for (char c : needle) { n16.push_back((uint8_t)c); n16.push_back(0); }
+            std::string mp_rel;
+            for (size_t i = 0; i + n16.size() <= sd.size() && mp_rel.empty(); i += 2) {
+                bool eq = true;
+                for (size_t k = 0; k < n16.size(); k += 2)
+                    if (tolower(sd[i + k]) != n16[k] || sd[i + k + 1] != 0) { eq = false; break; }
+                if (!eq) continue;
+                size_t s0 = i;
+                while (s0 >= 2 && !(sd[s0 - 2] == 0 && sd[s0 - 1] == 0)) s0 -= 2;
+                std::string full;
+                for (size_t j = s0; j + 1 < sd.size(); j += 2) {
+                    uint16_t c = sd[j] | (uint16_t(sd[j + 1]) << 8);
+                    if (!c) break;
+                    full += (char)tolower(c & 0xFF);
+                }
+                if (full.find("_model_parts.user") != std::string::npos) mp_rel = full;
+            }
+            while (!mp_rel.empty() && (mp_rel[0] == '@' || mp_rel[0] == ' ')) mp_rel.erase(0, 1);
+            std::string user_ver = "2";
+            { auto it = inv.suffixes.find("user"); if (it != inv.suffixes.end()) user_ver = it->second; }
+            const PakEntry* me = mp_rel.empty() ? nullptr
+                : base_pak.find(pak_path_hash(std::string_view("natives/stm/" + mp_rel + "." + user_ver)));
+            if (me) {
+                auto mdata = base_pak.read(*me);
+                std::vector<uint8_t> vd(mdata.begin(), mdata.end());
+                // Meshes and materials this slot relocated, as "<part>/<file>.mesh|.mdf2"
+                auto part_keys = [&](const std::string& folder,
+                                     const std::unordered_map<std::string, ModFileRef>& files,
+                                     bool with_vanilla) {
+                    std::unordered_set<std::string> keys;
+                    std::string base = std::string(BASE_PFX) + "model/esf/" + fd + "/" + folder + "/";
+                    auto add = [&](const std::string& pth) {
+                        std::string low = str_lower(pth);
+                        if (low.compare(0, base.size(), base) != 0) return;
+                        std::string rest = low.substr(base.size());
+                        for (const char* ext : {".mesh.", ".mdf2."}) {
+                            auto d = rest.find(ext);
+                            if (d != std::string::npos) { keys.insert(rest.substr(0, d + strlen(ext) - 1)); return; }
+                        }
+                    };
+                    for (auto& [pth, mf] : files) add(pth);
+                    if (with_vanilla) for (auto& vp : relocated_vanilla_mdf2) add(vp);
+                    return keys;
+                };
+                size_t n = patch_mdf2_minimal(vd, fd, old_f, new_f, part_keys(old_f, mc->files_in_folder, true));
+                if (!shared_parts.empty())
+                    n += patch_mdf2_minimal(vd, fd, "000", new_f, part_keys("000", mc->files_shared, false));
+                if (n > 0 && new_f.size() == 3) {
+                    std::string dst_rel = mp_rel;
+                    auto bpos = dst_rel.find("/battle_ud/");
+                    dst_rel.replace(bpos, 11, "/battle" + new_f + "/");
+                    std::string dst_pak = "natives/stm/" + dst_rel + "." + user_ver;
+                    writer.add_uncompressed(pak_path_hash(std::string_view(dst_pak)), std::move(vd));
+                    written_paths.insert(dst_pak);
+                    count++; patched++;
+                    mp_old_s = fd + "/battle_ud/" + fd + "v";
+                    mp_new_s = fd + "/battle" + new_f + "/" + fd + "v";
+                    printf("      model parts: %zu references repointed in %s\n", n, dst_rel.c_str());
+                }
+            }
+        }
+    }
+
     // Costume scene: targeted patching
     auto* orig_costume = inv.get_costume(slot.fighter, slot.original_costume_no);
     if (orig_costume && !orig_costume->scene.empty()) {
@@ -1516,6 +1717,23 @@ static void add_slot_files(PakWriter& writer,
                     }
                     wi += ow16.size();
                 }
+            }
+            // Fourth pass: point the scene at the slot's model_parts copy. Like CCVD, only from the
+            // second occurrence on: the first one sits in the scene's userdata table.
+            if (!mp_old_s.empty()) {
+                std::vector<uint8_t> o16, n16;
+                for (char c : mp_old_s) { o16.push_back((uint8_t)c); o16.push_back(0); }
+                for (char c : mp_new_s) { n16.push_back((uint8_t)c); n16.push_back(0); }
+                int occ = 0, done = 0;
+                for (size_t wi = 0; wi + o16.size() <= vdata.size(); wi += 2) {
+                    bool eq = true;
+                    for (size_t k = 0; k < o16.size(); k += 2)
+                        if (tolower(vdata[wi + k]) != o16[k] || vdata[wi + k + 1] != 0) { eq = false; break; }
+                    if (!eq) continue;
+                    if (++occ >= 2) { memcpy(vdata.data() + wi, n16.data(), n16.size()); done++; patched++; }
+                    wi += o16.size() - 2;
+                }
+                printf("      model parts: scene redirected (%d of %d references)\n", done, occ);
             }
             std::string new_scene = "natives/stm/product/charparam/esf/"
                                   + fd + "/" + slot.scene_name + ".scn.20";
@@ -1579,17 +1797,330 @@ static void add_restorations(PakWriter& writer,
                     }
                 }
             }
-        } else if (pak_path.find("/model/esf/") != std::string::npos && !in_relocated) {
+        } else if (pak_path.find("/model/esf/") != std::string::npos
+                   && !g_relocated_mod_paths.count(pak_path)) {
+            // Not in the game and not relocated by any slot: another slot may still reference it
+            // at this path (in_relocated alone dropped files a slot of another mod needed).
+            (void)in_relocated;
             auto data = mf.read_data();
             writer.add_uncompressed(h, std::move(data));
             written_paths.insert(pak_path);
             added++;
+            // ...with its high-resolution twin when the mod ships one
+            if (str_lower(pak_path).find(".tex.") != std::string::npos
+                && pak_path.compare(0, bp, BASE_PFX) == 0) {
+                std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
+                auto tw = all_mod.find(sp);
+                if (tw != all_mod.end() && !written_paths.count(sp)) {
+                    auto sd = tw->second.read_data();
+                    writer.add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(sd));
+                    written_paths.insert(sp);
+                }
+            }
         }
     }
     printf("  restored %d vanilla files, added %d mod-only files", restored, added);
     if (streaming_restored) printf(", %d streaming", streaming_restored);
     printf("\n");
 }
+
+// ============================================================================
+// Slot check
+// ============================================================================
+// A costume the game cannot load does not fail: its loading never completes and every costume shown
+// after it stays empty (Juri, 27/09: textures missing; Vegeta, 27/09: a head mesh whose materials its
+// material file does not define). Before the pak is written, every slot scene is read back the way the
+// game reads it: each mesh must be readable and each of its materials defined by the material file the
+// scene pairs it with (true of all 362 vanilla parts), and every file the slot references must exist:
+// the scene's own references and the textures of its material files. A failing part is rebuilt from
+// the mod's shared 000/ version of the part, else from the original costume's part; a missing file is
+// taken from the mod, else from the original costume. A slot that still fails is left out of the game
+// instead of being shipped, and the log says why.
+
+namespace slotcheck {
+
+// Printable UTF-16LE strings of a resource, in file order
+static std::vector<std::string> utf16_strings(const std::vector<uint8_t>& d, size_t min_len = 6) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        uint16_t c = uint16_t(d[i] | (d[i + 1] << 8));
+        if (c >= 0x20 && c < 0x7F) { cur += char(c); continue; }
+        if (cur.size() >= min_len) out.push_back(cur);
+        cur.clear();
+    }
+    if (cur.size() >= min_len) out.push_back(cur);
+    return out;
+}
+
+// Materials a mesh uses (SF6 mesh header: name table + material index table)
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
+    if (b.size() < 152 || memcmp(b.data(), "MESH", 4) != 0) return false;
+    auto r16 = [&](size_t o) { int16_t v; memcpy(&v, b.data() + o, 2); return v; };
+    auto r64 = [&](size_t o) { int64_t v; memcpy(&v, b.data() + o, 8); return v; };
+    const int16_t name_count = r16(20);
+    const int64_t lods = r64(32), mat_idx = r64(112), name_offs = r64(144);
+    if (name_count <= 0 || lods <= 0 || mat_idx <= 0 || name_offs <= 0) return false;
+    if (size_t(lods) + 2 > b.size() || size_t(name_offs) + 8ull * name_count > b.size()) return false;
+    const uint8_t mcount = b[size_t(lods) + 1];
+    if (size_t(mat_idx) + 2ull * mcount > b.size()) return false;
+    std::vector<std::string> names;
+    for (int i = 0; i < name_count; i++) {
+        int64_t o = r64(size_t(name_offs) + 8ull * i);
+        if (o <= 0 || size_t(o) >= b.size()) return false;
+        std::string s;
+        for (size_t k = size_t(o); k < b.size() && b[k]; k++) s += char(b[k]);
+        names.push_back(s);
+    }
+    for (int k = 0; k < mcount; k++) {
+        int16_t idx = r16(size_t(mat_idx) + 2ull * k);
+        if (idx < 0 || idx >= name_count) return false;
+        out.push_back(names[idx]);
+    }
+    return true;
+}
+
+// Materials a material file defines (.mdf2.31: 100-byte material headers, name offset first)
+static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
+    if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return false;
+    int16_t count; memcpy(&count, b.data() + 6, 2);
+    const size_t H = 100;
+    if (count < 0 || 16 + H * size_t(count) > b.size()) return false;
+    for (int i = 0; i < count; i++) {
+        int64_t o; memcpy(&o, b.data() + 16 + H * i, 8);
+        if (o <= 0 || size_t(o) >= b.size()) return false;
+        std::string s;
+        for (size_t k = size_t(o); k + 1 < b.size(); k += 2) {
+            uint16_t c = uint16_t(b[k] | (b[k + 1] << 8));
+            if (!c) break;
+            s += char(c);
+        }
+        out.push_back(s);
+    }
+    return true;
+}
+
+// What the game will find at a path: our pak first, then the game's paks by priority
+struct GameFiles {
+    PakWriter* writer = nullptr;
+    std::vector<PakReader*> paks;
+    bool exists(const std::string& p) const {
+        uint64_t h = pak_path_hash(std::string_view(p));
+        if (writer->find(h)) return true;
+        for (auto* pk : paks) if (pk->find(h)) return true;
+        return false;
+    }
+    std::vector<uint8_t> load(const std::string& p) const {
+        uint64_t h = pak_path_hash(std::string_view(p));
+        if (writer->find(h)) return writer->get(h);
+        for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
+        return {};
+    }
+};
+
+// "Product/Model/..../x.mesh" -> "natives/stm/product/model/..../x.mesh.230110883", or empty
+static std::string resource_path(std::string ref, const std::unordered_map<std::string, std::string>& suffixes) {
+    while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+    std::string low = str_lower(ref);
+    if (low.compare(0, 8, "product/") != 0) return {};
+    auto dot = low.rfind('.');
+    auto sl = low.rfind('/');
+    if (dot == std::string::npos || (sl != std::string::npos && dot < sl)) return {};
+    auto it = suffixes.find(low.substr(dot + 1));
+    if (it == suffixes.end() || it->second.empty()) return {};
+    return "natives/stm/" + low + "." + it->second;
+}
+
+struct Ctx {
+    GameFiles gf;
+    const std::unordered_map<std::string, std::string>* suffixes = nullptr;
+    const std::unordered_map<std::string, ModFileRef>* all_mod = nullptr;
+};
+
+// Why a mesh and its material file cannot be loaded together, or empty
+static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf) {
+    if (mesh.empty()) return "mesh missing";
+    if (mdf.empty()) return "material file missing";
+    std::vector<std::string> mm, dm;
+    if (!mesh_materials(mesh, mm)) return "mesh not readable";
+    if (!mdf2_materials(mdf, dm)) return "material file not readable";
+    std::unordered_set<std::string> have(dm.begin(), dm.end());
+    std::string missing;
+    int n_missing = 0;
+    for (auto& m : mm)
+        if (!have.count(m)) { if (n_missing++ < 3) missing += (missing.empty() ? "" : ", ") + m; }
+    if (n_missing) return std::to_string(n_missing) + " materials of the mesh not in its material file (" + missing + ")";
+    for (auto& s : utf16_strings(mdf)) {
+        if (!str_ends_with(str_lower(s), ".tex")) continue;
+        std::string p = resource_path(s, *c.suffixes);
+        if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
+        if (!p.empty())
+            if (auto* t = c.gf.writer->peek(pak_path_hash(std::string_view(p)))) {
+                std::vector<uint8_t> head(t->begin(), t->begin() + std::min<size_t>(t->size(), 4096));
+                if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
+            }
+    }
+    return {};
+}
+
+// Missing textures of a material file: taken from the mod when it ships them (a file of the mod the
+// relocation left out), else, for a texture of the slot, from the original costume. Returns how many.
+static int restore_missing_textures(Ctx& c, const std::vector<uint8_t>& mdf, const SlotInfo& slot) {
+    int n = 0;
+    const std::string sd = "/" + slot.fighter_dir + "/" + slot.new_folder + "/";
+    const std::string od = "/" + slot.fighter_dir + "/" + slot.original_folder + "/";
+    const std::string ss = slot.fighter_dir + "_" + slot.new_folder + "_";
+    const std::string os = slot.fighter_dir + "_" + slot.original_folder + "_";
+    for (auto& s : utf16_strings(mdf)) {
+        if (!str_ends_with(str_lower(s), ".tex")) continue;
+        std::string p = resource_path(s, *c.suffixes);
+        if (p.empty() || c.gf.exists(p)) continue;
+        std::vector<uint8_t> data;
+        auto it = c.all_mod->find(p);
+        if (it != c.all_mod->end()) data = it->second.read_data();
+        else if (p.find(sd) != std::string::npos) {
+            std::string v = p;
+            v.replace(v.find(sd), sd.size(), od);
+            auto k = v.find(ss);
+            if (k != std::string::npos) v.replace(k, ss.size(), os);
+            data = c.gf.load(v);
+            if (!data.empty()) {
+                std::string sv = "natives/stm/streaming/" + v.substr(12), sp = "natives/stm/streaming/" + p.substr(12);
+                auto twin = c.gf.load(sv);
+                if (!twin.empty() && !c.gf.exists(sp))
+                    c.gf.writer->add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(twin));
+            }
+        }
+        if (data.empty()) continue;
+        c.gf.writer->add_uncompressed(pak_path_hash(std::string_view(p)), std::move(data));
+        n++;
+    }
+    return n;
+}
+
+static void put_file(PakWriter& w, const std::string& p, std::vector<uint8_t> data) {
+    uint64_t h = pak_path_hash(std::string_view(p));
+    if (w.find(h)) w.replace(h, std::move(data));
+    else w.add_uncompressed(h, std::move(data));
+}
+
+// Finds a file of a mod by path, case-insensitively
+static const ModFileRef* mod_file(const std::unordered_map<std::string, ModFileRef>& files, const std::string& low_path) {
+    auto it = files.find(low_path);
+    if (it != files.end()) return &it->second;
+    for (auto& [p, mf] : files) if (str_lower(p) == low_path) return &mf;
+    return nullptr;
+}
+
+// Checks one slot, repairing what can be repaired. Returns an empty string when the slot is loadable.
+static std::string check_slot(Ctx& c, const SlotInfo& slot) {
+    const std::string& fd = slot.fighter_dir;
+    const std::string& old_f = slot.original_folder;
+    const std::string& new_f = slot.new_folder;
+    const std::string scene_p = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+    auto scene = c.gf.writer->get(pak_path_hash(std::string_view(scene_p)));
+    if (scene.empty()) return "slot scene missing";
+    const std::string slot_dir = "/" + fd + "/" + new_f + "/", slot_stem = fd + "_" + new_f + "_",
+                      slot_ud = "/battle" + new_f + "/";
+    auto is_slot = [&](const std::string& p) {
+        return p.find(slot_dir) != std::string::npos || p.find(slot_stem) != std::string::npos
+            || p.find(slot_ud) != std::string::npos;
+    };
+    const std::string mesh_suf = c.suffixes->count("mesh") ? c.suffixes->at("mesh") : "230110883";
+    const std::string mdf_suf = c.suffixes->count("mdf2") ? c.suffixes->at("mdf2") : "31";
+    auto model_path = [&](const std::string& folder, const std::string& part, const std::string& tail) {
+        return std::string(BASE_PFX) + "model/esf/" + fd + "/" + folder + "/" + part + "/"
+             + fd + "_" + folder + "_" + part + tail;
+    };
+
+    // References of the scene, in order
+    std::vector<std::string> refs;
+    for (auto& s : utf16_strings(scene)) {
+        std::string p = resource_path(s, *c.suffixes);
+        if (!p.empty()) refs.push_back(p);
+    }
+
+    // 1. Files of the slot that the scene references: they must exist
+    for (auto& p : refs) {
+        if (!is_slot(p) || c.gf.exists(p)) continue;
+        std::string v = p;
+        auto k = v.find(slot_dir);
+        if (k != std::string::npos) v.replace(k, slot_dir.size(), "/" + fd + "/" + old_f + "/");
+        k = v.find(slot_stem);
+        if (k != std::string::npos) v.replace(k, slot_stem.size(), fd + "_" + old_f + "_");
+        auto data = (v != p) ? c.gf.load(v) : std::vector<uint8_t>();
+        if (data.empty()) return "file missing: " + p;
+        put_file(*c.gf.writer, p, std::move(data));
+        printf("      check: missing %s taken from the original costume\n", p.c_str());
+    }
+
+    // 2. Each mesh with the material file that follows it
+    for (size_t i = 0; i < refs.size(); i++) {
+        const std::string& mesh_p = refs[i];
+        if (!str_ends_with(mesh_p, (".mesh." + mesh_suf).c_str())) continue;
+        std::string mdf_p;
+        for (size_t j = i + 1; j < refs.size(); j++)
+            if (str_ends_with(refs[j], (".mdf2." + mdf_suf).c_str())) { mdf_p = refs[j]; break; }
+        if (mdf_p.empty() || (!is_slot(mesh_p) && !is_slot(mdf_p))) continue;
+        std::string why = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
+        if (why.empty()) continue;
+        if (why.compare(0, 16, "texture missing:") == 0) {
+            int n = restore_missing_textures(c, c.gf.load(mdf_p), slot);
+            std::string again = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
+            if (again.empty()) {
+                printf("      check: %d missing textures of %s restored\n", n, mdf_p.c_str());
+                continue;
+            }
+            why = again;
+        }
+
+        // Part of the slot: "<fd>/<new_f>/<part>/..."
+        auto sd = mesh_p.find(slot_dir);
+        if (sd == std::string::npos) return mesh_p + ": " + why;
+        std::string part = mesh_p.substr(sd + slot_dir.size());
+        part = part.substr(0, part.find('/'));
+        const bool mdf_is_slot = is_slot(mdf_p);
+
+        // Candidates: the mod's shared 000/ part, then the original costume's part
+        struct Cand { const char* label; std::vector<uint8_t> mesh, mdf; };
+        std::vector<Cand> cands;
+        if (auto* mc = slot.mod_costume) {
+            if (auto* mm = mod_file(mc->files_shared, model_path("000", part, ".mesh." + mesh_suf))) {
+                Cand k{"the mod's shared 000/ part", mm->read_data(), {}};
+                auto* md = mod_file(mc->files_shared, model_path("000", part, "_v00.mdf2." + mdf_suf));
+                k.mdf = md ? md->read_data() : c.gf.load(model_path("000", part, "_v00.mdf2." + mdf_suf));
+                // The mod's shared textures were relocated into the slot folder (phase 1c)
+                std::unordered_set<std::string> keys;
+                const std::string base = std::string(BASE_PFX) + "model/esf/" + fd + "/000/";
+                for (auto& [pth, mf] : mc->files_shared) {
+                    std::string low = str_lower(pth);
+                    auto dot = low.find(".tex.");
+                    if (low.compare(0, base.size(), base) == 0 && dot != std::string::npos)
+                        keys.insert(low.substr(base.size(), dot + 4 - base.size()));
+                }
+                if (!keys.empty() && !k.mdf.empty()) patch_mdf2_minimal(k.mdf, fd, "000", new_f, keys);
+                cands.push_back(std::move(k));
+            }
+        }
+        cands.push_back({"the original costume's part", c.gf.load(model_path(old_f, part, ".mesh." + mesh_suf)),
+                         c.gf.load(model_path(old_f, part, "_v00.mdf2." + mdf_suf))});
+        bool fixed = false;
+        for (auto& k : cands) {
+            if (!mdf_is_slot) k.mdf = c.gf.load(mdf_p);   // the scene keeps its material file
+            if (!pair_problem(c, k.mesh, k.mdf).empty()) continue;
+            put_file(*c.gf.writer, mesh_p, std::move(k.mesh));
+            if (mdf_is_slot) put_file(*c.gf.writer, mdf_p, std::move(k.mdf));
+            printf("      check: part %s (%s) rebuilt from %s\n", part.c_str(), why.c_str(), k.label);
+            fixed = true;
+            break;
+        }
+        if (!fixed) return "part " + part + ": " + why;
+    }
+    return {};
+}
+
+}  // namespace slotcheck
+
 
 // ============================================================================
 // Costume mods folder scanning
@@ -2134,6 +2665,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
         uf.info_path = u.dir;
     }
     printf("    mod_id: %s\n", uf.mod_id.c_str());
+    g_mod_names[uf.mod_id] = uf.name.empty() ? uf.info_path : uf.name;
     if (!uf.name.empty()) {
         std::string extra = uf.addonfor.empty() ? std::string() : "  (add-on for " + uf.addonfor + ")";
         printf("    name: %s%s\n", uf.name.c_str(), extra.c_str());
@@ -2571,12 +3103,14 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         log_close(); return 1;
     }
     logf("  %zu entries\n", base_pak.entry_count());
+    load_current_crcs(base_pak);
 
     // 5. Scan each mod pak
     std::vector<std::pair<std::string, std::vector<ModCostume>>> mods_with_costumes;
     std::unordered_map<std::string, ModFileRef> all_mod_files;
     std::unordered_map<uint64_t, std::string> all_upgraded_tex; // old hash -> current path
     std::vector<std::unique_ptr<PakReader>> mod_pak_readers;
+    std::vector<std::pair<int, PakReader*>> game_patch_readers;   // patch paks the game loads
 
     for (auto& pi : mod_paks) {
         printf("\n  patch_%03d: %s\n", pi.num, pi.path.c_str());
@@ -2602,6 +3136,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
         mods_with_costumes.push_back({mod_id, std::move(costumes)});
         all_mod_files.insert(known.begin(), known.end());
+        game_patch_readers.push_back({pi.num, reader.get()});
         mod_pak_readers.push_back(std::move(reader));
     }
 
@@ -2614,7 +3149,14 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (mods_with_costumes.empty() || !std::any_of(mods_with_costumes.begin(),
             mods_with_costumes.end(), [](auto& p){ return !p.second.empty(); })) {
         logf("No costume mods detected -- cleaning up\n");
-        for (auto& op : our_paks) { DeleteFileA(op.path.c_str()); logf("  deleted %s\n", op.path.c_str()); }
+        for (auto& op : our_paks) {
+            if (!delete_with_retry(op.path)) {
+                logf("ERROR: %s is in use by another Street Fighter 6 process, not removed. "
+                     "Close every Street Fighter 6 and launch the game again.\n", op.path.c_str());
+                log_close(); return 1;
+            }
+            logf("  deleted %s\n", op.path.c_str());
+        }
         std::string reg_path = registry_dir + "\\registry.json";
         auto registry = load_registry(reg_path.c_str());
         registry.slots.clear(); registry.possession.clear(); registry.fingerprint.clear();
@@ -2654,8 +3196,58 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     PakWriter writer;
     std::unordered_set<std::string> written_paths;
 
+    g_relocated_mod_paths.clear();
     for (auto& sl : slots)
         add_slot_files(writer, written_paths, sl, inv, base_pak, all_mod_files);
+
+    // Restorations
+    add_restorations(writer, written_paths, slots, inv, base_pak, all_mod_files);
+
+    // Slot check: every slot must be loadable as the game will load it, else it is left out
+    {
+        std::vector<std::unique_ptr<PakReader>> dlc_readers;
+        {
+            WIN32_FIND_DATAA fdta;
+            std::string dlc_dir = game_dir + "\\dlc\\";
+            HANDLE fh = FindFirstFileA((dlc_dir + "*.pak").c_str(), &fdta);
+            if (fh != INVALID_HANDLE_VALUE) {
+                do {
+                    auto r = std::make_unique<PakReader>();
+                    if (r->open((dlc_dir + fdta.cFileName).c_str())) dlc_readers.push_back(std::move(r));
+                } while (FindNextFileA(fh, &fdta));
+                FindClose(fh);
+            }
+        }
+        slotcheck::Ctx ctx;
+        ctx.gf.writer = &writer;
+        std::sort(game_patch_readers.begin(), game_patch_readers.end(),
+                  [](auto& a, auto& b) { return a.first > b.first; });
+        for (auto& [num, r] : game_patch_readers) ctx.gf.paks.push_back(r);
+        for (auto& r : dlc_readers) ctx.gf.paks.push_back(r.get());
+        ctx.gf.paks.push_back(&base_pak);
+        ctx.suffixes = &inv.suffixes;
+        ctx.all_mod = &all_mod_files;
+        printf("\nChecking slots...\n");
+        std::vector<SlotInfo> kept;
+        int left_out = 0;
+        for (auto& sl : slots) {
+            std::string why = slotcheck::check_slot(ctx, sl);
+            if (why.empty()) { kept.push_back(sl); continue; }
+            left_out++;
+            printf("  WARN: slot %s/v%02d (%s, from %s) left out, the game could not load it: %s\n",
+                   sl.fighter_dir.c_str(), sl.new_costume_no, sl.outfit_name.c_str(),
+                   mod_label(sl.mod_id).c_str(), why.c_str());
+        }
+        printf("  %zu slots checked, %d left out\n", slots.size(), left_out);
+        if (left_out) {
+            std::vector<Possession> pos;
+            for (auto& p : registry.possession)
+                for (auto& sl : kept)
+                    if (sl.fighter_dir == p.fighter_dir && sl.new_costume_no == p.costume_no) { pos.push_back(p); break; }
+            registry.possession = std::move(pos);
+            slots = std::move(kept);
+        }
+    }
 
     // Static structural files (generic list from static_meta.json, fallback to hardcoded)
     struct SFile { std::string local; std::string pak; };
@@ -2676,6 +3268,17 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             printf("  WARN: static file not found: %s\n", fp.c_str());
             continue;
         }
+        // The costume table only lists the slots in use: a character the player does not own shows
+        // every record of the table, and a reserved slot has no scene to load.
+        if (str_ends_with(sf.pak, "fightercostumeuserdata.user.2")) {
+            std::unordered_set<uint32_t> keep;
+            for (auto& sl : slots) keep.insert((uint32_t)sl.record_id);
+            size_t kept = 0, removed = 0;
+            if (trim_costume_table(data, keep, &kept, &removed))
+                printf("  costume table: %zu slot records kept, %zu unused ones left out\n", kept, removed);
+            else
+                printf("  WARN: costume table layout not recognised, shipped with every reserved record\n");
+        }
         size_t dsz = data.size();
         uint64_t h = pak_path_hash(std::string_view(sf.pak));
         writer.add_uncompressed(h, std::move(data));
@@ -2683,8 +3286,24 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         printf("  static: %s (%zu bytes)\n", sf.local.c_str(), dsz);
     }
 
-    // Restorations
-    add_restorations(writer, written_paths, slots, inv, base_pak, all_mod_files);
+
+    // Mod files made before a game update
+    if (!g_crc_upgraded_files.empty())
+        printf("  %zu mod files brought to the current type signatures (colour files made before a game update)\n",
+               g_crc_upgraded_files.size());
+    if (!g_tex_repaired_files.empty())
+        printf("  %zu mod textures with a wrong row pitch in their mip table, repaired\n", g_tex_repaired_files.size());
+    for (auto& f : g_tex_bad_files)
+        printf("  WARN: mod texture with an inconsistent mip table: %s\n", f.c_str());
+    if (!g_layout_upgraded_files.empty())
+        printf("  %zu colour files converted from the 2023 layout (disabled fur block added to each garment)\n",
+               g_layout_upgraded_files.size());
+    for (auto& [t, files] : g_crc_stale_files) {
+        const char* lbl = type_label(t);
+        printf("  WARN: %zu mod files use an older layout of %s%s%08X, left as they are (their colours may not load):\n",
+               files.size(), lbl ? lbl : "type ", lbl ? " " : "", t);
+        for (auto& f : files) printf("        %s\n", f.c_str());
+    }
 
     // Marker
     {
@@ -2695,14 +3314,28 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         written_paths.insert(MARKER_PATH);
     }
 
-    // 8. Delete old our-paks
+    // 8. Delete old our-paks. A Street Fighter 6 that was just closed often keeps running for a while
+    // with the pak open, which can then be neither deleted nor rewritten (27/09: the pak stayed the old
+    // one while the log said "wrote", and the saved fingerprint kept it for good). Up to ~10 s of
+    // waiting covers a normal exit; past that nothing is changed, the old pak and the old registry
+    // still match, and the next launch tries again.
     for (auto& op : our_paks) {
-        DeleteFileA(op.path.c_str());
+        if (!delete_with_retry(op.path)) {
+            logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
+                 "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
+                 op.path.c_str());
+            log_close(); return 1;
+        }
         logf("  removed old pak: %s\n", op.path.c_str());
     }
 
-    // 9. Write output pak
-    writer.write(target_path.c_str());
+    // 9. Write output pak; the registry is saved only once it is on disk
+    if (!writer.write(target_path.c_str())) {
+        DeleteFileA(target_path.c_str());
+        logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
+             target_path.c_str());
+        log_close(); return 1;
+    }
     logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
