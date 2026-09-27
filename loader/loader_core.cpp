@@ -107,7 +107,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-27-variants";
+static const char* LOADER_BUILD_ID = "2026-09-27-accessory";
 
 // ============================================================================
 // Utility
@@ -979,9 +979,12 @@ struct ModCostume {
     std::unordered_map<std::string, ModFileRef> files_other;
 };
 
+// allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
+// ships a mesh; the other parts stay those of the original outfit. By default a body mesh (part 01)
+// is required, since a partial option is usually an add-on of another option of the same mod.
 static std::vector<ModCostume> detect_mod_costumes(
     const std::unordered_map<std::string, ModFileRef>& mod_files,
-    const VanillaIndex& inv) {
+    const VanillaIndex& inv, bool allow_partial = false) {
 
     std::map<std::string, ModCostume> groups; // "fd\tfolder" -> MC
     std::unordered_map<std::string, ModFileRef> other_files;
@@ -1030,17 +1033,16 @@ static std::vector<ModCostume> detect_mod_costumes(
     // Reject partial mods: require at least one body mesh (part 01)
     std::vector<ModCostume> result;
     for (auto& [k, mc] : groups) {
-        bool has_body = false;
+        bool has_body = false, has_mesh = false;
         for (auto& [p, mf] : mc.files_in_folder) {
-            if (p.find("/" + mc.original_folder + "/01/") != std::string::npos
-                && str_ends_with(str_lower(p), ".mesh.230110883")) {
-                has_body = true; break;
-            }
+            if (!str_ends_with(str_lower(p), ".mesh.230110883")) continue;
+            has_mesh = true;
+            if (p.find("/" + mc.original_folder + "/01/") != std::string::npos) has_body = true;
         }
-        if (has_body) {
+        if (has_body || (allow_partial && has_mesh)) {
             result.push_back(std::move(mc));
-        } else {
-            printf("  partial mod ignored: %s/%s (no body mesh in part 01, %zu files)\n",
+        } else if (!allow_partial) {
+            printf("  partial option: %s/%s (no body mesh in part 01, %zu files)\n",
                    mc.fighter_dir.c_str(), mc.original_folder.c_str(),
                    mc.files_in_folder.size());
         }
@@ -2906,7 +2908,18 @@ static void finalize_units(ScanOutputs& o) {
             }
         }
         if (bases.empty()) {
-            printf("\n  add-on %s: no costume it can complete was found, ignored\n", a.u.rel.c_str());
+            // Nothing in its own mod to complete (glasses removed, other earrings): it completes the
+            // original outfit it modifies, in a slot of its own; that outfit stays as it is.
+            auto costumes = detect_mod_costumes(a.files, o.inv, true);
+            if (costumes.empty()) {
+                printf("\n  add-on %s: no costume it can complete was found, ignored\n", a.u.rel.c_str());
+                continue;
+            }
+            printf("\n  add-on %s: applied to the original outfit it modifies\n", a.u.rel.c_str());
+            print_costumes(costumes);
+            o.mods_out.push_back({a.mod_id, std::move(costumes)});
+            o.all_mod_out.insert(a.files.begin(), a.files.end());
+            o.infos_out.push_back({a.u.rel, a.info_path});
             continue;
         }
         for (auto j : bases) addons_of[j].push_back(i);

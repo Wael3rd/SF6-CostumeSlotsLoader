@@ -35,6 +35,7 @@ The loader therefore does two things at every launch where something changed:
 | Modular mod built for Fluffy (main files, "pick one" groups, optional extras) | Every option combined with every other: over a hundred outfits, the character full | One outfit per shape option (body, shoes, jacket), first texture option (skin), optional parts left out, as Fluffy installs by default |
 | Options of one mod replacing the same files | Two options on the same slot | Each option gets its own identity; outfits made of exactly the same files are installed once |
 | A character with more than 100 outfits | Outfits past the 100th silently missing | Named in the log |
+| Mod that only changes a part of an original outfit (glasses, earrings) | Ignored | The original outfit with the change, in a slot of its own; the original stays as it is |
 
 Every check is measured against the game's own files: the mesh and material rule holds for all 362
 original costume parts, the texture rule for all 7,084 original costume textures, and the colour-file
@@ -67,7 +68,7 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin; reworked on 2026-09-27, to re-check |
 | C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin; reworked on 2026-09-27, to re-check |
 | C. Viper | [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) | Works |  |
-| C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Not supported | Changes the glasses only: no outfit of its own to become a slot |
+| C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Works, to re-check | Changes the head only: gives Outfit 2 without glasses in a slot of its own (since 1.6.0) |
 | Cammy | [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) | Works |  |
 | Cammy | [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) | Works |  |
 | Dee Jay | [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) | Works |  |
@@ -81,12 +82,12 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 
 ## Not supported yet
 
-- Mods that change only an accessory of an original outfit (glasses, earrings) with no outfit of
-  their own: they have nothing to become a slot.
 - Mods that combine parts of two outfits (for example a head taken from Drive Tech Wear): they give
   one entry per outfit they touch.
 - Hair physics driven by the stage wind, when the mod ships its own wind settings: untested.
 - Characters released after the loader's tables were built (they cover the 31 characters up to Yasmine).
+- An accessory mod is applied to the original outfit only, not combined with other mods of the same
+  outfit.
 
 ## Reporting a mod
 

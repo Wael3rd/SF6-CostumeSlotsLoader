@@ -19,6 +19,8 @@ folder; the loader rewrites it at every launch where something changed.
 
 - **C. Viper Swimsuit and Lace Lingerie** now give 8 outfits each instead of over a hundred
   combinations: every body and shoe option with the default skin, optional extras left out.
+- **C. Viper C2 - Glasses Removed** now gives Outfit 2 without glasses, in a slot of its own; the
+  original Outfit 2 keeps its glasses.
 
 ## Loader paths never triggered by a real mod
 

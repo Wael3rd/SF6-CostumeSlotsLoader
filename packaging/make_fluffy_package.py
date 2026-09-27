@@ -50,6 +50,10 @@ COSTUME_MODS_TXT = CRLF.join([
     "Nothing to unpack, nothing to convert. Restart the game: each costume becomes an EXTRA",
     "outfit slot (Outfit I, II, ...). Bundles with several options give one slot per option,",
     "and add-on options (no gloves, alternative hair...) are combined with their base outfit.",
+    "Modular mods (main files, body options, skin options, optional extras) give one slot per",
+    "body option with the default skin, as Fluffy installs them by default. A mod that only",
+    "changes an accessory of an original outfit (glasses, earrings) gives that outfit with the",
+    "change, in a slot of its own.",
     "Delete the file or folder and restart to remove the slot. Fluffy Mod Manager paks work too.",
     "",
     "The first launch after adding a large archive takes a few seconds longer: the archive is",
@@ -83,8 +87,12 @@ README_TXT = CRLF.join([
     "If the game already has an amd_ags_x64.dll from another tool, chain it instead of",
     "overwriting it: rename that one to amd_ags_x64_real.dll first.",
     "",
-    "The loader rebuilds re_chunk_000.pak.patch_004.pak at launch (about 1 s when the mods",
-    "changed, 30 ms otherwise) and writes SF6_CostumeLoader.log in the game folder.",
+    "The loader rebuilds its patch pak (the re_chunk_000.pak.patch_NNN.pak after those of other",
+    "mods) at launch when the costume mods changed, and writes SF6_CostumeLoader.log in the game",
+    "folder. That takes a few seconds, up to a few minutes the first time large archives are added",
+    "(they are unpacked once); with nothing changed it takes about 30 ms. The game window appears",
+    "once it is done. Mods made for older versions of the game are brought up to date on the way;",
+    "an outfit the game could not load is left out and named in the log.",
     "",
 ])
 
@@ -119,7 +127,7 @@ def main():
     modinfo = (
         "name=SF6 Costume Slots Loader\n"
         "version=%s\n"
-        "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, restoring the original outfit. Install once; then install costume mods as usual and restart the game.\n"
+        "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, keeping the original outfit. Costume mods can also be dropped as downloaded (.zip, .7z, .rar) in reframework/costume_mods/<Character>/. Install once; then install costume mods as usual and restart the game.\n"
         "author=Wael\n"
         "NameAsBundle=SF6 Costume Slots Loader\n" % a.version)
     readme = README_TXT % a.version

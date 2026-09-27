@@ -1,12 +1,13 @@
 # Changelog
 
-## Unreleased (since 1.5.0)
+## 1.6.0 (2026-09-27)
 
 ### Installing mods
 - Costume mods are read as downloaded: `.zip`, `.7z` and `.rar` files in
   `reframework\costume_mods\<Character>\`, unpacked once into a hidden cache.
 - Bundles give one outfit slot per option; add-ons (no gloves, other hair, a weapon) are combined with
-  the outfit they complete, one variant per add-on plus one with all of them.
+  the outfit they complete: up to three add-ons, one variant each, plus one with all of them when they
+  do not replace the same files.
 - Identical files shared by several variants are stored once in the generated pak.
 
 ### Mods made for older versions of the game
@@ -36,6 +37,8 @@
   option, first texture option, optional parts left out (C. Viper went from 134 entries to 18).
 - Options that replace the same files no longer share a slot; identical outfits are installed once.
 - A character that runs out of its 100 slots is named in the log.
+- A mod that only changes a part of an original outfit (glasses, earrings) gives that outfit with
+  the change, in a slot of its own, instead of being ignored.
 
 ### Names
 - Outfit names follow each other per character (Outfit I, II, III) after a mod is removed; each slot
