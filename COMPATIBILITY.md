@@ -32,6 +32,9 @@ The loader therefore does two things at every launch where something changed:
 | A Street Fighter 6 still closing holds the old pak | Old costumes kept for good | Waits for it, and if it does not let go, changes nothing and retries at the next launch |
 | A mod is removed while the game still remembers its outfit (last choice, replay) | Loading stalls on the removed outfit | Every unused slot number shows the character's Outfit 1 instead |
 | Slots keep their number after a mod is removed | Gaps in the names (Outfit I, III, IV) | Names follow each other per character (Outfit I, II, III); the numbers behind them stay |
+| Modular mod built for Fluffy (main files, "pick one" groups, optional extras) | Every option combined with every other: over a hundred outfits, the character full | One outfit per shape option (body, shoes, jacket), first texture option (skin), optional parts left out, as Fluffy installs by default |
+| Options of one mod replacing the same files | Two options on the same slot | Each option gets its own identity; outfits made of exactly the same files are installed once |
+| A character with more than 100 outfits | Outfits past the 100th silently missing | Named in the log |
 
 Every check is measured against the game's own files: the mesh and material rule holds for all 362
 original costume parts, the texture rule for all 7,084 original costume textures, and the colour-file
@@ -61,10 +64,27 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Akuma | [Specter Akuma](https://www.nexusmods.com/streetfighter6/mods/3805) | Works | |
 | C. Viper | [Coat no mesh, Outfit 1](https://www.nexusmods.com/streetfighter6/mods/2966) | Works | Keeps the coat, removes the mesh fabric. Colours intact with the C3 body mod installed (reported lost with Fluffy alone) |
 | C. Viper | An Outfit 3 body mod shared on Discord | Works | |
+| C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin; reworked on 2026-09-27, to re-check |
+| C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin; reworked on 2026-09-27, to re-check |
+| C. Viper | [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) | Works |  |
+| C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Not supported | Changes the glasses only: no outfit of its own to become a slot |
+| Cammy | [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) | Works |  |
+| Cammy | [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) | Works |  |
+| Dee Jay | [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) | Works |  |
+| Dhalsim | [Dhalsim The Wrestler](https://www.nexusmods.com/streetfighter6/mods/296) | Works | Reported loading Drive Tech with the old loader; fixed by the Dhalsim folder rule |
+| Ingrid | [Ingrid as Athena (KOF97)](https://www.nexusmods.com/streetfighter6/mods/3579) | Works, listed twice | The mod also changes a Drive Tech part, which gives a second entry |
+| Mai | [Viper Racer](https://www.nexusmods.com/streetfighter6/mods/3018) | Works | Mai Racer (listed as a C. Viper mod in the community list) |
+| Manon | [Manon Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3717) | Works |  |
+| Marisa | [Marisa Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3782) | Works |  |
+| Alex | [Minotaur Alex](https://www.nexusmods.com/streetfighter6/mods/3760) | Works |  |
+| Yasmine | [Yasmine shorts](https://www.nexusmods.com/streetfighter6/mods/3904) | Works | Reported to crash on some AMD GPUs even without the loader |
 
 ## Not supported yet
 
-- Mods that combine parts of two outfits (for example a head taken from Drive Tech Wear).
+- Mods that change only an accessory of an original outfit (glasses, earrings) with no outfit of
+  their own: they have nothing to become a slot.
+- Mods that combine parts of two outfits (for example a head taken from Drive Tech Wear): they give
+  one entry per outfit they touch.
 - Hair physics driven by the stage wind, when the mod ships its own wind settings: untested.
 - Characters released after the loader's tables were built (they cover the 31 characters up to Yasmine).
 

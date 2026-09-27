@@ -12,6 +12,13 @@ folder; the loader rewrites it at every launch where something changed.
 - Online casual match with Ryu Outfit I and with Ken's Vegeta Majin slot, on official REFramework 1.5.8.
 - Removing a mod: the outfit goes away, names stay contiguous, no stall.
 - A character played on trial lists only the installed mods' outfits.
+- Fifteen more mods installed at once as archives (see COMPATIBILITY.md): first launch about three
+  minutes, later ones instant.
+
+## Changed on 2026-09-27 evening, to check in game
+
+- **C. Viper Swimsuit and Lace Lingerie** now give 8 outfits each instead of over a hundred
+  combinations: every body and shoe option with the default skin, optional extras left out.
 
 ## Loader paths never triggered by a real mod
 
@@ -39,34 +46,17 @@ folder; the loader rewrites it at every launch where something changed.
 
 ## Mods to try
 
-From the community compatibility list, not tested yet with the current loader. Mods marked
-"reported" failed with an earlier version; they are the most useful to retest.
-
-### Reported problems, to retest
-
-- [Dhalsim The Wrestler](https://www.nexusmods.com/streetfighter6/mods/296) (Dhalsim, monkeygigabuster) — reported: loads Drive Tech instead of the mod; the Dhalsim fix should cover it
-- [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) (C. Viper, Lilotty) — reported: loses its colours when the C. Viper C3 body mod is installed
-- [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) (C. Viper, itsB00) — reported: modular mod, did not work in C1 or C2
-- [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) (C. Viper, itsB00 x IrKyZz) — reported: modular mod, did not work in C1 or C2
-- [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) (C. Viper, 24KP) — reported: not detected as a slot of its own (glasses only)
-- [Ingrid as Athena (KOF97)](https://www.nexusmods.com/streetfighter6/mods/3579) (Ingrid, Amaso) — reported: extra Drive Tech entry after the mod, physics wrong
-- [Viper Racer](https://www.nexusmods.com/streetfighter6/mods/3018) (C. Viper, Chewie) — same author as DOA4 Christie and TFD Racer, whose colour files needed an upgrade
-- [Yasmine shorts](https://www.nexusmods.com/streetfighter6/mods/3904) (Yasmine, Jeans22) — reported to crash even without the loader, more on AMD GPUs; try last
+From the community compatibility list, not tested yet with the current loader. The mods it reported
+as broken with earlier versions have all been retested (see COMPATIBILITY.md).
 
 ### Same families as mods that work (quick confirmations)
 
 - [Jopok Lily](https://www.nexusmods.com/streetfighter6/mods/2995) (Lily, TonKumaTsu)
-- [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) (Cammy, TonKumaTsu)
 - [Ingrid Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3665) (Ingrid, THEJAMK)
 - [Chun Li Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3710) (Chun-Li, THEJAMK)
-- [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) (Cammy, THEJAMK)
 - [Mai Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3712) (Mai, THEJAMK)
 - [Lily Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3716) (Lily, THEJAMK)
-- [Manon Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3717) (Manon, THEJAMK)
 - [Aki Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3718) (A.K.I., THEJAMK)
-- [Minotaur Alex](https://www.nexusmods.com/streetfighter6/mods/3760) (Alex, TonKumaTsu)
-- [Marisa Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3782) (Marisa, THEJAMK)
-- [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) (Dee Jay, TonKumaTsu)
 - [C Viper Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3929) (C. Viper, THEJAMK)
 - [Yasmine Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3930) (Yasmine, THEJAMK)
 - [Marisa Of Silence](https://www.nexusmods.com/streetfighter6/mods/3961) (Marisa, TonKumaTsu)

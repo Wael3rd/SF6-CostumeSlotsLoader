@@ -107,7 +107,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-27-removal";
+static const char* LOADER_BUILD_ID = "2026-09-27-variants";
 
 // ============================================================================
 // Utility
@@ -1060,6 +1060,13 @@ struct SlotInfo {
     const ModCostume* mod_costume = nullptr;
 };
 
+// Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
+static std::unordered_map<std::string, std::string> g_mod_names;
+static std::string mod_label(const std::string& id) {
+    auto it = g_mod_names.find(id);
+    return it == g_mod_names.end() ? id : it->second;
+}
+
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
     const VanillaIndex& inv, Registry& reg, const StaticMeta& meta) {
@@ -1093,6 +1100,7 @@ static std::vector<SlotInfo> assign_slots(
 
     std::vector<SlotInfo> slots;
     std::vector<RegSlot> new_reg;
+    std::unordered_map<int, std::set<int>> used_run;   // numbers given in this run, per fighter
 
     for (auto& [mod_id, costumes] : mods) {
         for (auto& mc : costumes) {
@@ -1107,6 +1115,9 @@ static std::vector<SlotInfo> assign_slots(
             std::string key = mod_id + "\t" + std::to_string(mc.fighter) + "\t"
                             + std::to_string(mc.original_costume_no);
             auto eit = existing.find(key);
+            // A number already given in this run (two options that once shared an id) gets a new one
+            if (eit != existing.end() && used_run[mc.fighter].count(eit->second->new_costume_no))
+                eit = existing.end();
             if (eit != existing.end()) {
                 auto& es = *eit->second;
                 si.new_costume_no = es.new_costume_no;
@@ -1115,7 +1126,11 @@ static std::vector<SlotInfo> assign_slots(
             } else {
                 int cno = smallest_free(taken_cno[mc.fighter],
                                         meta.slot_min, meta.slot_max);
-                if (cno < 0) continue; // out of slots
+                if (cno < 0) {
+                    printf("  WARN: %s has no free outfit slot left (%d to %d all used), %s not installed\n",
+                           mc.fighter_dir.c_str(), meta.slot_min, meta.slot_max, mod_label(mod_id).c_str());
+                    continue;
+                }
                 int fld_min = inv.max_folder(mc.fighter) + 1;
                 int fld = smallest_free(taken_folder[mc.fighter], fld_min, fld_min + 200);
                 if (fld < 0) continue;
@@ -1132,6 +1147,7 @@ static std::vector<SlotInfo> assign_slots(
                 si.record_id = sr->record_id;
                 si.manage_id = sr->manage_id;
             }
+            used_run[mc.fighter].insert(si.new_costume_no);
             slots.push_back(si);
             new_reg.push_back({si.mod_id, si.fighter_dir, si.original_folder,
                                si.new_folder, si.scene_name,
@@ -1150,12 +1166,6 @@ static std::vector<SlotInfo> assign_slots(
 // instance a texture a DriveTech mod keeps in the C1 folder) must still be written where it is,
 // even when another mod's slot relocates that same folder.
 static std::unordered_set<std::string> g_relocated_mod_paths;
-// Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
-static std::unordered_map<std::string, std::string> g_mod_names;
-static std::string mod_label(const std::string& id) {
-    auto it = g_mod_names.find(id);
-    return it == g_mod_names.end() ? id : it->second;
-}
 
 static void add_slot_files(PakWriter& writer,
                            std::unordered_set<std::string>& written_paths,
@@ -2723,14 +2733,157 @@ static bool shares_target(const UnitFiles& a, const UnitFiles& b) {
     return false;
 }
 
+static bool contains_ci(const std::string& s, const char* sub) {
+    return str_lower(s).find(sub) != std::string::npos;
+}
+
+static bool unit_has_mesh(const UnitFiles& u) {
+    for (auto& [p, mf] : u.files) if (str_lower(p).find(".mesh.") != std::string::npos) return true;
+    return false;
+}
+
+static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
+    for (auto& [p, mf] : a.files) if (b.files.count(p)) return true;
+    return false;
+}
+
+static std::string unit_label(const UnitFiles& u) { return trim_ws(u.name.empty() ? u.u.rel : u.name); }
+
+// Pushes one costume made of several options, files merged in the given order (later ones win)
+static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
+                          const std::string& info_rel, const std::string& info_path) {
+    std::unordered_map<std::string, ModFileRef> merged;
+    std::string id_src;
+    for (auto i : parts) {
+        for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
+        id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
+    }
+    char idb[24];
+    snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
+    printf("\n  variant: %s\n", label.c_str());
+    auto costumes = detect_mod_costumes(merged, o.inv);
+    print_costumes(costumes);
+    if (costumes.empty()) return;
+    printf("    mod_id: %s\n", idb);
+    g_mod_names[idb] = label;
+    o.mods_out.push_back({idb, std::move(costumes)});
+    for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
+    o.infos_out.push_back({info_rel, info_path});
+}
+
+// A modular mod made for Fluffy Mod Manager: options point ("addonfor") at groups, not at other
+// options. "1) Main files" hangs from the root, then "2) skin" and "3) outfit" groups where one
+// option is picked, and optional extras. As Fluffy installs by default: each costume is the main
+// files plus one option per group. A group whose options change the shape (meshes) gives one
+// costume per option; a group that only changes textures (skins) keeps its first option; optional
+// groups and options are left out. Without this, every body got every skin and extra stacked on it
+// (C. Viper swimsuit and lingerie: over 130 outfits, the character's 100 slots overflowed).
+static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
+    std::map<std::string, std::vector<size_t>> groups;   // by addonfor; sorted: "(root)" < "2) " < "3) "
+    for (auto i : tree) groups[str_lower(trim_ws(g_units[i].addonfor))].push_back(i);
+    std::vector<std::pair<std::string, size_t>> fixed;             // (group, option) in every costume
+    std::vector<std::pair<std::string, std::vector<size_t>>> axes; // groups giving one costume per option
+    int optional_left = 0, skins_left = 0;
+    std::string root;
+    for (auto& [key, members] : groups) {
+        std::vector<size_t> m;
+        for (auto i : members) {
+            if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) { optional_left++; continue; }
+            if (!g_units[i].files.empty()) m.push_back(i);
+        }
+        if (m.empty()) continue;
+        std::sort(m.begin(), m.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+        if (root.empty() && !key.empty() && key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
+        if (m.size() == 1) { fixed.push_back({key, m[0]}); continue; }
+        bool shape = false;
+        for (auto i : m) if (unit_has_mesh(g_units[i])) shape = true;
+        if (shape) axes.push_back({key, m});
+        else { fixed.push_back({key, m[0]}); skins_left += int(m.size()) - 1; }
+    }
+    if (root.size() > 2 && root.front() == '(' && root.back() == ')') root = trim_ws(root.substr(1, root.size() - 2));
+    if (root.empty()) root = g_units[tree[0]].u.rel;
+    // Several shape groups multiply; past 24 costumes only the largest one varies
+    size_t total = 1;
+    for (auto& a : axes) total *= a.second.size();
+    if (total > 24 && axes.size() > 1) {
+        std::sort(axes.begin(), axes.end(), [](auto& a, auto& b) { return a.second.size() > b.second.size(); });
+        for (size_t k = 1; k < axes.size(); ++k) fixed.push_back({axes[k].first, axes[k].second[0]});
+        axes.resize(1);
+        total = axes[0].second.size();
+    }
+    printf("\n  modular mod %s: %zu costume%s", root.c_str(), total, total > 1 ? "s" : "");
+    if (skins_left) printf(", first option of each texture group (%d others left out)", skins_left);
+    if (optional_left) printf(", %d optional part%s left out", optional_left, optional_left > 1 ? "s" : "");
+    printf("\n");
+    std::vector<size_t> pick(axes.size(), 0);
+    for (size_t n = 0; n < total; ++n) {
+        std::vector<std::pair<std::string, size_t>> parts = fixed;
+        std::string label = root;
+        for (size_t a = 0; a < axes.size(); ++a) {
+            size_t i = axes[a].second[pick[a]];
+            parts.push_back({axes[a].first, i});
+            label += " - " + unit_label(g_units[i]);
+        }
+        std::stable_sort(parts.begin(), parts.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        std::vector<size_t> idx;
+        for (auto& p : parts) idx.push_back(p.second);
+        push_combined(idx, label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path);
+        for (size_t a = 0; a < axes.size(); ++a) {           // next combination
+            if (++pick[a] < axes[a].second.size()) break;
+            pick[a] = 0;
+        }
+    }
+}
+
 // Turns the loaded units into costumes. Complete options are used as they are. A partial option
 // is matched to the option it completes, most explicit rule first: its Fluffy "addonfor" name,
 // then the same Fluffy bundle, then the same folder or archive; in every case it must touch the
-// same costume folder (except for the explicit "addonfor" name). Each base then gets one variant
-// per add-on, plus one with all its add-ons when it has several.
+// same costume folder (except for the explicit "addonfor" name). A base with up to three add-ons
+// gets one variant per add-on, plus one with all of them when they do not replace the same files;
+// with more add-ons only the base is used. Modular mods (see build_modular) are handled apart.
 static void finalize_units(ScanOutputs& o) {
-    for (auto& uf : g_units) {
-        if (uf.costumes.empty()) continue;
+    // Options of one mod often replace the same files (skins, bodies) and got the same id, hence
+    // the same slot: the first one (by path) keeps the id, the others get one derived from their path.
+    {
+        std::map<std::string, std::vector<size_t>> by_id;
+        for (size_t i = 0; i < g_units.size(); ++i) by_id[g_units[i].mod_id].push_back(i);
+        for (auto& [id, v] : by_id) {
+            if (v.size() < 2) continue;
+            std::sort(v.begin(), v.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+            for (size_t k = 1; k < v.size(); ++k) {
+                auto& u = g_units[v[k]];
+                char idb[24];
+                snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id + "|" + u.u.rel));
+                u.mod_id = idb;
+                g_mod_names[u.mod_id] = u.name.empty() ? u.info_path : u.name;
+            }
+        }
+    }
+
+    // Modular mods: options whose "addonfor" names no option of the same mod
+    std::set<size_t> modular;
+    {
+        std::map<int, std::vector<size_t>> by_source;
+        for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
+        for (auto& [src, idx] : by_source) {
+            std::vector<size_t> tree;
+            for (auto i : idx) {
+                const auto& u = g_units[i];
+                if (u.addonfor.empty()) continue;
+                bool names_option = false;
+                for (auto j : idx)
+                    if (j != i && !g_units[j].files.empty() && eq_ci(g_units[j].name, u.addonfor)) names_option = true;
+                if (!names_option) tree.push_back(i);
+            }
+            if (tree.size() < 2) continue;
+            for (auto i : tree) modular.insert(i);
+            build_modular(tree, o);
+        }
+    }
+
+    for (size_t i = 0; i < g_units.size(); ++i) {
+        auto& uf = g_units[i];
+        if (uf.costumes.empty() || modular.count(i)) continue;
         o.mods_out.push_back({uf.mod_id, uf.costumes});
         o.all_mod_out.insert(uf.files.begin(), uf.files.end());
         o.infos_out.push_back({uf.u.rel, uf.info_path});
@@ -2739,12 +2892,12 @@ static void finalize_units(ScanOutputs& o) {
     std::map<size_t, std::vector<size_t>> addons_of;
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto& a = g_units[i];
-        if (!a.costumes.empty() || a.files.empty()) continue;
+        if (!a.costumes.empty() || a.files.empty() || modular.count(i)) continue;
         std::vector<size_t> bases;
         for (int rule = 0; rule < 3 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
-                if (b.costumes.empty()) continue;
+                if (b.costumes.empty() || modular.count(j)) continue;
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
@@ -2761,29 +2914,23 @@ static void finalize_units(ScanOutputs& o) {
 
     for (auto& [j, adds] : addons_of) {
         const auto& b = g_units[j];
+        if (adds.size() > 3) {
+            printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
+                   unit_label(b).c_str(), adds.size());
+            continue;
+        }
         std::vector<std::vector<size_t>> variants;
         for (auto a : adds) variants.push_back({a});
-        if (adds.size() >= 2) variants.push_back(adds);
+        bool apart = true;
+        for (size_t x = 0; x < adds.size(); ++x)
+            for (size_t y = x + 1; y < adds.size(); ++y)
+                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+        if (adds.size() >= 2 && apart) variants.push_back(adds);
         for (auto& v : variants) {
-            auto merged = b.files;
-            std::string id_src = b.mod_id;
-            std::string label = b.name.empty() ? b.u.rel : b.name;
-            for (auto a : v) {
-                const auto& ad = g_units[a];
-                for (auto& [pth, mf] : ad.files) merged[pth] = mf;
-                id_src += "+" + ad.mod_id;
-                label += " + " + (ad.name.empty() ? ad.u.rel : ad.name);
-            }
-            char idb[24];
-            snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
-            printf("\n  variant: %s\n", label.c_str());
-            auto costumes = detect_mod_costumes(merged, o.inv);
-            print_costumes(costumes);
-            if (costumes.empty()) continue;
-            printf("    mod_id: %s\n", idb);
-            o.mods_out.push_back({idb, std::move(costumes)});
-            for (auto a : v) o.all_mod_out.insert(g_units[a].files.begin(), g_units[a].files.end());
-            o.infos_out.push_back({b.u.rel + " (with add-ons)", b.info_path});
+            std::vector<size_t> parts{j};
+            std::string label = unit_label(b);
+            for (auto a : v) { parts.push_back(a); label += " + " + unit_label(g_units[a]); }
+            push_combined(parts, label, o, b.u.rel + " (with add-ons)", b.info_path);
         }
     }
     g_units.clear();
@@ -3177,6 +3324,31 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         registry.slots.clear(); registry.possession.clear(); registry.fingerprint.clear();
         save_registry(reg_path.c_str(), registry);
         log_close(); return 0;
+    }
+
+    // 5c. Costumes made of exactly the same files are installed once
+    {
+        std::unordered_map<std::string, std::string> seen;   // signature -> mod_id
+        for (auto& [mid, cs] : mods_with_costumes) {
+            if (cs.empty()) continue;
+            std::vector<std::string> items;
+            for (auto& mc : cs) {
+                std::string pre = mc.fighter_dir + "|" + std::to_string(mc.original_costume_no) + "|";
+                for (auto* m : {&mc.files_in_folder, &mc.files_shared, &mc.files_other})
+                    for (auto& [p, mf] : *m)
+                        items.push_back(pre + p + "=" + (mf.disk_path.empty()
+                            ? std::to_string((uintptr_t)mf.pak) + ":" + std::to_string(mf.hash)
+                            : str_lower(mf.disk_path)));
+            }
+            std::sort(items.begin(), items.end());
+            std::string sig;
+            for (auto& it : items) { sig += it; sig += '\n'; }
+            auto f = seen.find(sig);
+            if (f == seen.end()) { seen[sig] = mid; continue; }
+            printf("  %s: exactly the same files as %s, installed once\n",
+                   mod_label(mid).c_str(), mod_label(f->second).c_str());
+            cs.clear();
+        }
     }
 
     // 6. Load registry and assign slots

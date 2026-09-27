@@ -31,6 +31,12 @@
 - Removing a mod no longer stalls the character select: every unused slot number shows the
   character's Outfit 1, for a choice saved by the game or a replay that still names it.
 
+### Modular mods and variants
+- Modular mods built for Fluffy are installed the way Fluffy does by default: one outfit per shape
+  option, first texture option, optional parts left out (C. Viper went from 134 entries to 18).
+- Options that replace the same files no longer share a slot; identical outfits are installed once.
+- A character that runs out of its 100 slots is named in the log.
+
 ### Names
 - Outfit names follow each other per character (Outfit I, II, III) after a mod is removed; each slot
   keeps its number behind the name, so saved choices and replays stay valid.
