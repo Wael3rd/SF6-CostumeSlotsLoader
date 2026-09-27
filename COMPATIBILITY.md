@@ -54,6 +54,7 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Ken | [Alpha Ken](https://www.nexusmods.com/streetfighter6/mods/2822) | Works | Read straight from the `.rar` |
 | Ken | [Alpha Ken (Ripped Gi)](https://www.nexusmods.com/streetfighter6/mods/2822) | Works | |
 | Ken | [Ken SFV style](https://www.nexusmods.com/streetfighter6/mods/1145) | Works | October 2023: old textures and 2023 colour files, both converted |
+| Ken | [Ken SFV Hair (V2)](https://www.nexusmods.com/streetfighter6/mods/3897) | Works | Hair only. On its own: Outfit 2 with that hair. In one sub-folder with Ken SFV style: Ken SFV with that hair |
 | Ken | [Vegeta Majin](https://www.nexusmods.com/streetfighter6/mods/126) | Works | June 2023: head part rebuilt, two textures repaired; online too |
 | Cammy | [DOA4 Christie](https://www.nexusmods.com/streetfighter6/mods/3166) | Works | Colour files upgraded; the costume was white before, all 10 colours now show |
 | Lily | [Nico bundle](https://www.nexusmods.com/streetfighter6/mods/78) | Works | Outfits with hair and weapon add-ons, weapons follow the slot |
@@ -65,10 +66,10 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Akuma | [Specter Akuma](https://www.nexusmods.com/streetfighter6/mods/3805) | Works | |
 | C. Viper | [Coat no mesh, Outfit 1](https://www.nexusmods.com/streetfighter6/mods/2966) | Works | Keeps the coat, removes the mesh fabric. Colours intact with the C3 body mod installed (reported lost with Fluffy alone) |
 | C. Viper | An Outfit 3 body mod shared on Discord | Works | |
-| C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin; reworked on 2026-09-27, to re-check |
-| C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin; reworked on 2026-09-27, to re-check |
+| C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin |
+| C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin |
 | C. Viper | [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) | Works |  |
-| C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Works, to re-check | Changes the head only: gives Outfit 2 without glasses in a slot of its own (since 1.6.0) |
+| C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Works | Changes the head only: gives Outfit 2 without glasses in a slot of its own (since 1.6.0) |
 | Cammy | [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) | Works |  |
 | Cammy | [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) | Works |  |
 | Dee Jay | [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) | Works |  |

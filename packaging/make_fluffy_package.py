@@ -56,6 +56,13 @@ COSTUME_MODS_TXT = CRLF.join([
     "change, in a slot of its own.",
     "Delete the file or folder and restart to remove the slot. Fluffy Mod Manager paks work too.",
     "",
+    "To combine a costume with an add-on that comes in another archive (hair, weapon...), put both",
+    "archives in one sub-folder of the character: reframework/costume_mods/<Character>/<any name>/.",
+    "",
+    "To see what is installed: double-click SF6_CostumeAudit.bat (in this folder). It lists the",
+    "costume mods found, where they come from and the outfits made of them, and saves the report",
+    "to SF6_CostumeAudit.txt, to send along with SF6_CostumeLoader.log when reporting a problem.",
+    "",
     "The first launch after adding a large archive takes a few seconds longer: the archive is",
     "unpacked once into the hidden .cache folder, then reused.",
     "",
@@ -75,7 +82,8 @@ README_TXT = CRLF.join([
     "  reframework/autorun/        Lua script (menus, colours)",
     "  reframework/plugins/        native plugin (online matches)",
     "  reframework/data/           static tables + vanilla costume index",
-    "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders",
+    "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders;",
+    "                              SF6_CostumeAudit.bat there lists what is installed",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
     "",
@@ -119,6 +127,8 @@ def main():
         (plugin, "reframework/plugins/SF6_CostumeSlotsNative.dll"),
         (os.path.join(loader_dir, "vanilla_costume_index.tsv"), "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv"),
     ]
+    for n in ("SF6_CostumeAudit.bat", "SF6_CostumeAudit.ps1"):
+        files.append((os.path.join(HERE, "audit", n), "reframework/costume_mods/" + n))
     for n in sorted(os.listdir(os.path.join(loader_dir, "static"))):
         if n.lower().endswith((".md",)): continue
         files.append((os.path.join(loader_dir, "static", n), "reframework/data/SF6_Costumes_Data/loader/static/" + n))

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.1 (2026-09-27)
+
+- `reframework\costume_mods\SF6_CostumeAudit.bat`: lists what is installed (loader, REFramework, script,
+  plugin), what the last launch did, the costume mods found with where they come from (Fluffy pak,
+  archive, folder) and the outfits each one gave. Read-only; the report is saved next to it.
+- The loader writes `reframework\data\SF6_Costumes_Data\outfits.json` at each generation, the list the
+  audit reads.
+- Notes or other files dropped in `costume_mods` no longer make the next launch rebuild everything; only
+  archives, `.pak` files and folders count.
+- A mod without a name in its `modinfo.ini` is named after its archive or folder in the log.
+- Documented: a costume and an add-on from two archives are combined when put in one sub-folder of the
+  character.
+
 ## 1.6.0 (2026-09-27)
 
 ### Installing mods

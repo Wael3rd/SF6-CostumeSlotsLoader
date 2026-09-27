@@ -14,13 +14,9 @@ folder; the loader rewrites it at every launch where something changed.
 - A character played on trial lists only the installed mods' outfits.
 - Fifteen more mods installed at once as archives (see COMPATIBILITY.md): first launch about three
   minutes, later ones instant.
-
-## Changed on 2026-09-27 evening, to check in game
-
-- **C. Viper Swimsuit and Lace Lingerie** now give 8 outfits each instead of over a hundred
-  combinations: every body and shoe option with the default skin, optional extras left out.
-- **C. Viper C2 - Glasses Removed** now gives Outfit 2 without glasses, in a slot of its own; the
-  original Outfit 2 keeps its glasses.
+- C. Viper Swimsuit and Lace Lingerie as 8 outfits each, and Outfit 2 without glasses.
+- A costume and an add-on from two archives combined by putting them in one sub-folder (Ken SFV
+  style + Ken SFV Hair).
 
 ## Loader paths never triggered by a real mod
 
@@ -34,6 +30,8 @@ folder; the loader rewrites it at every launch where something changed.
 
 ## Installation and first launch
 
+- **Audit script**: run `reframework\costume_mods\SF6_CostumeAudit.bat` on a fresh installation, before and
+  after the first launch, and check that every mod and outfit is listed with its origin.
 - **Fluffy Mod Manager**: install the release archive through Fluffy on a clean game, then add costume
   mods both through Fluffy and as archives in `reframework\costume_mods\<Character>\`.
 - **First launch with many archives**: the archives are unpacked once into `costume_mods\.cache`.

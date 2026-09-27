@@ -107,7 +107,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-27-accessory";
+static const char* LOADER_BUILD_ID = "2026-09-27-audit";
 
 // ============================================================================
 // Utility
@@ -1067,6 +1067,53 @@ static std::unordered_map<std::string, std::string> g_mod_names;
 static std::string mod_label(const std::string& id) {
     auto it = g_mod_names.find(id);
     return it == g_mod_names.end() ? id : it->second;
+}
+// Where each mod comes from, for outfits.json: kind ("fluffy pak", "archive", "folder", "pak") and the
+// file or folder the user installed ("re_chunk_000.pak.patch_002.pak", "Ken/KenSFV.zip", "Ryu/Vagrant")
+struct ModSource { std::string kind, source; };
+static std::unordered_map<std::string, ModSource> g_mod_source;
+struct LeftOut { int fighter; std::string label, reason; };
+static std::vector<LeftOut> g_left_out;
+
+static std::string json_escape(const std::string& v) {
+    std::string o;
+    for (unsigned char c : v) {
+        if (c == '"' || c == '\\') { o += '\\'; o += char(c); }
+        else if (c < 0x20) { char b[8]; sprintf(b, "\\u%04x", c); o += b; }
+        else o += char(c);
+    }
+    return o;
+}
+
+// outfits.json: every outfit of the last generation with the mod it comes from, read by the audit script
+static void write_outfits_json(const std::string& path, const std::vector<SlotInfo>& slots,
+                               const std::string& pak_name) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return;
+    char when[32];
+    SYSTEMTIME st; GetLocalTime(&st);
+    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n  \"outfits\": [",
+            when, json_escape(LOADER_BUILD_ID).c_str(), json_escape(pak_name).c_str());
+    bool first = true;
+    for (auto& sl : slots) {
+        auto src = g_mod_source.count(sl.mod_id) ? g_mod_source[sl.mod_id] : ModSource{"", ""};
+        fprintf(f, "%s\n    {\"fighter\": %d, \"fighter_dir\": \"%s\", \"costume_no\": %d, \"name\": \"%s\", "
+                   "\"based_on\": %d, \"label\": \"%s\", \"kind\": \"%s\", \"source\": \"%s\"}",
+                first ? "" : ",", sl.fighter, sl.fighter_dir.c_str(), sl.new_costume_no,
+                json_escape(sl.outfit_name).c_str(), sl.original_costume_no,
+                json_escape(mod_label(sl.mod_id)).c_str(), json_escape(src.kind).c_str(), json_escape(src.source).c_str());
+        first = false;
+    }
+    fprintf(f, "\n  ],\n  \"left_out\": [");
+    first = true;
+    for (auto& lo : g_left_out) {
+        fprintf(f, "%s\n    {\"fighter\": %d, \"label\": \"%s\", \"reason\": \"%s\"}", first ? "" : ",",
+                lo.fighter, json_escape(lo.label).c_str(), json_escape(lo.reason).c_str());
+        first = false;
+    }
+    fprintf(f, "\n  ]\n}\n");
+    fclose(f);
 }
 
 static std::vector<SlotInfo> assign_slots(
@@ -2653,6 +2700,12 @@ static void print_costumes(const std::vector<ModCostume>& costumes) {
                mc.original_folder.c_str(), mc.files_in_folder.size());
 }
 
+// Name shown for a mod without a modinfo name: the last part of its path (archive, folder or .pak)
+static std::string rel_tail(const std::string& rel) {
+    auto sl = rel.find_last_of('/');
+    return sl == std::string::npos ? rel : rel.substr(sl + 1);
+}
+
 static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     const VanillaIndex& inv = o.inv;
     UnitFiles uf;
@@ -2692,7 +2745,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
         uf.info_path = u.dir;
     }
     printf("    mod_id: %s\n", uf.mod_id.c_str());
-    g_mod_names[uf.mod_id] = uf.name.empty() ? uf.info_path : uf.name;
+    g_mod_names[uf.mod_id] = uf.name.empty() ? rel_tail(u.rel) : uf.name;
     if (!uf.name.empty()) {
         std::string extra = uf.addonfor.empty() ? std::string() : "  (add-on for " + uf.addonfor + ")";
         printf("    name: %s%s\n", uf.name.c_str(), extra.c_str());
@@ -2728,6 +2781,23 @@ static bool scan_one_mod_folder(const std::string& mod_dir, const std::string& r
     std::vector<ModUnit> units;
     collect_mod_units(mod_dir, rel_path, 0, 0, units);
     return process_units(units, rel_path, o);
+}
+
+static ModSource source_of_rel(const std::string& rel) {
+    std::vector<std::string> parts;
+    size_t a = 0;
+    while (a <= rel.size()) {
+        size_t b = rel.find('/', a);
+        if (b == std::string::npos) b = rel.size();
+        parts.push_back(rel.substr(a, b - a));
+        a = b + 1;
+    }
+    ModSource ms;
+    if (!parts.empty() && is_archive_name(parts[0])) { ms.kind = "archive"; ms.source = parts[0]; return ms; }
+    ms.source = parts.size() >= 2 ? parts[0] + "/" + parts[1] : rel;
+    std::string entry = parts.size() >= 2 ? str_lower(parts[1]) : str_lower(rel);
+    ms.kind = is_archive_name(entry) ? "archive" : (str_ends_with(entry, ".pak") ? "pak" : "folder");
+    return ms;
 }
 
 static bool shares_target(const UnitFiles& a, const UnitFiles& b) {
@@ -2768,6 +2838,7 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     if (costumes.empty()) return;
     printf("    mod_id: %s\n", idb);
     g_mod_names[idb] = label;
+    if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
     o.infos_out.push_back({info_rel, info_path});
@@ -2857,10 +2928,12 @@ static void finalize_units(ScanOutputs& o) {
                 char idb[24];
                 snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id + "|" + u.u.rel));
                 u.mod_id = idb;
-                g_mod_names[u.mod_id] = u.name.empty() ? u.info_path : u.name;
+                g_mod_names[u.mod_id] = u.name.empty() ? rel_tail(u.u.rel) : u.name;
             }
         }
     }
+
+    for (auto& u : g_units) g_mod_source[u.mod_id] = source_of_rel(u.u.rel);
 
     // Modular mods: options whose "addonfor" names no option of the same mod
     std::set<size_t> modular;
@@ -3225,8 +3298,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 if (fd_c.cFileName[0] == '.') continue;
                 std::string cd = costume_mods_dir + "\\" + fd_c.cFileName;
                 if (!(fd_c.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                    // archive dropped straight into costume_mods
-                    folder_infos.push_back({ std::string(fd_c.cFileName), cd });
+                    // archive dropped straight into costume_mods; other files (notes, the audit
+                    // report) are not read and must not trigger a rebuild
+                    if (is_archive_name(fd_c.cFileName))
+                        folder_infos.push_back({ std::string(fd_c.cFileName), cd });
                     continue;
                 }
                 WIN32_FIND_DATAA fd_co;
@@ -3234,6 +3309,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 if (hco == INVALID_HANDLE_VALUE) continue;
                 do {
                     if (fd_co.cFileName[0] == '.') continue;   // folders and loose files (archives, paks)
+                    if (!(fd_co.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                        && !is_archive_name(fd_co.cFileName)
+                        && !str_ends_with(str_lower(fd_co.cFileName), ".pak")) continue;
                     folder_infos.push_back({
                         std::string(fd_c.cFileName) + "/" + fd_co.cFileName,
                         cd + "\\" + fd_co.cFileName
@@ -3295,6 +3373,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
         std::string mod_id = identify_mod_pak(pi.path.c_str());
         printf("    mod_id: %s\n", mod_id.c_str());
+        {
+            auto sl = pi.path.find_last_of("\\/");
+            g_mod_source[mod_id] = {"fluffy pak", sl == std::string::npos ? pi.path : pi.path.substr(sl + 1)};
+            g_mod_names[mod_id] = g_mod_source[mod_id].source;
+        }
 
         std::unordered_map<std::string, ModFileRef> known;
         std::vector<uint64_t> unknown;
@@ -3441,10 +3524,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         printf("\nChecking slots...\n");
         std::vector<SlotInfo> kept;
         int left_out = 0;
+        g_left_out.clear();
         for (auto& sl : slots) {
             std::string why = slotcheck::check_slot(ctx, sl);
             if (why.empty()) { kept.push_back(sl); continue; }
             left_out++;
+            g_left_out.push_back({sl.fighter, mod_label(sl.mod_id), why});
             printf("  WARN: slot %s/v%02d (%s, from %s) left out, the game could not load it: %s\n",
                    sl.fighter_dir.c_str(), sl.new_costume_no, sl.outfit_name.c_str(),
                    mod_label(sl.mod_id).c_str(), why.c_str());
@@ -3590,6 +3675,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     registry.fingerprint = new_fp;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
+    write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
 
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

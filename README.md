@@ -17,6 +17,14 @@ Costume mods can also go straight into `reframework\costume_mods\<Character>\`, 
 `.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
 unpack, nothing to convert.
 
+## Checking what is installed
+
+Double-click `reframework\costume_mods\SF6_CostumeAudit.bat`. It changes nothing: it checks that the loader,
+REFramework, the Lua script and the native plugin are in place, says what the last launch did, lists the
+costume mods it finds (Fluffy Mod Manager paks in the game folder, archives and folders in `costume_mods`)
+with the outfits each one gave, then the extra outfits by character. The report is saved as
+`SF6_CostumeAudit.txt` next to it: send it with `SF6_CostumeLoader.log` when reporting a problem.
+
 ## Archives, bundles and add-ons
 
 - **Archives** are recognised by their content, not their name, and unpacked once into the hidden
@@ -27,6 +35,13 @@ unpack, nothing to convert.
   outfit it completes, the way Fluffy Mod Manager installs them together. The loader reads Fluffy's
   `addonfor` and bundle names; without them it matches options of the same archive that touch the same
   outfit. Each outfit gets one variant per add-on, plus one with all of them.
+- **Combining two downloads**: a costume and an add-on published separately (a hair, a weapon) are combined
+  when both archives sit in one sub-folder of the character, `costume_mods\<Character>\<any name>\`. The
+  add-on must change the same original outfit as the costume.
+- **Modular mods** (main files, body options, skin options, optional extras) give one outfit per body
+  option with the default skin, as Fluffy installs them by default.
+- A mod that only changes a part of an original outfit (glasses, earrings) gives that outfit with the
+  change, in a slot of its own.
 - Variants share most of their files, and the generated pak stores identical data only once.
 - Broken, password-protected or unrelated archives are skipped and reported in `SF6_CostumeLoader.log`.
 
@@ -68,6 +83,7 @@ loader/       the loader itself: KPKA pak reader and writer, scene and material 
 plugin/       native REFramework plugin, used during online matches
 script/       Lua script, used in menus (slot selection, colours, ownership)
 tools/        generators for the data files, run against your own game installation
+audit/        SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
 packaging/    builds the distributable zip
 ```
 
