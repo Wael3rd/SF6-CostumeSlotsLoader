@@ -39,17 +39,18 @@ reader rewrites all 1,530 original colour files byte for byte.
 
 ## Mods tested
 
-Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "Works" means seen in game,
-offline (training, character select, replays).
+Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "Works" means seen in game
+(training, character select, replays); Ryu Outfit I and Vegeta Majin were also played online.
 
 | Character | Mod | Result | Notes |
 |---|---|---|---|
 | Ryu | [Aloha Ryu bundle](https://www.nexusmods.com/streetfighter6/mods/3214) | Works | 12 variants (outfit 2 and 3, gloves and headband add-ons) |
-| Ryu | Vagrant, installed with Fluffy Mod Manager | Works | Patch paks are read like folders |
+| Ryu | [Vagrant Ryu](https://www.nexusmods.com/streetfighter6/mods/2663) | Works | Installed with Fluffy Mod Manager (patch pak) |
+| Akuma | [Akuma Classic Barechest](https://www.nexusmods.com/streetfighter6/mods/1693) | Works | A ready-made `.pak`, read from its `.rar` too |
 | Ken | [Alpha Ken](https://www.nexusmods.com/streetfighter6/mods/2822) | Works | Read straight from the `.rar` |
 | Ken | [Alpha Ken (Ripped Gi)](https://www.nexusmods.com/streetfighter6/mods/2822) | Works | |
 | Ken | [Ken SFV style](https://www.nexusmods.com/streetfighter6/mods/1145) | Works | October 2023: old textures and 2023 colour files, both converted |
-| Ken | [Vegeta Majin](https://www.nexusmods.com/streetfighter6/mods/126) | Works offline | June 2023: head part rebuilt, two textures repaired. Online: network error, under investigation |
+| Ken | [Vegeta Majin](https://www.nexusmods.com/streetfighter6/mods/126) | Works | June 2023: head part rebuilt, two textures repaired; online too |
 | Cammy | [DOA4 Christie](https://www.nexusmods.com/streetfighter6/mods/3166) | Works | Colour files upgraded; the costume was white before, all 10 colours now show |
 | Lily | [Nico bundle](https://www.nexusmods.com/streetfighter6/mods/78) | Works | Outfits with hair and weapon add-ons, weapons follow the slot |
 | Zangief | [Specter Zangief](https://www.nexusmods.com/streetfighter6/mods/3816) | Works | |
@@ -58,7 +59,7 @@ offline (training, character select, replays).
 | Juri | [Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3781) | Works | Together with Oni Juri, in either order |
 | A.K.I. | [TFD Racer](https://www.nexusmods.com/streetfighter6/mods/3084) | Works | Same colour-file problem as Christie, fixed the same way |
 | Akuma | [Specter Akuma](https://www.nexusmods.com/streetfighter6/mods/3805) | Works | |
-| C. Viper | [Coat no mesh, Outfit 1](https://www.nexusmods.com/streetfighter6/mods/2966) | Works | Keeps the coat, removes the mesh fabric |
+| C. Viper | [Coat no mesh, Outfit 1](https://www.nexusmods.com/streetfighter6/mods/2966) | Works | Keeps the coat, removes the mesh fabric. Colours intact with the C3 body mod installed (reported lost with Fluffy alone) |
 | C. Viper | An Outfit 3 body mod shared on Discord | Works | |
 
 ## Not supported yet

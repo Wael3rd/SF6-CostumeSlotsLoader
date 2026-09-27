@@ -9,22 +9,9 @@ folder; the loader rewrites it at every launch where something changed.
 - Colours of Cammy DOA4 Christie and A.K.I. TFD Racer, all 10 colours.
 - Alpha Ken (Ripped Gi), Lily Nico Outfits I and II, the 12 Aloha Ryu variants one by one.
 - Replays with modded outfits.
-- Online casual match with Ryu Outfit I (a mod), on official REFramework 1.5.8.
-
-## Fixed, to confirm in game
-
-- **Removing a mod.** Before the fix, removing Alpha Ken (Ripped Gi) left Ken's character select on a
-  missing outfit and navigation stalled. Now every unused slot number shows the character's Outfit 1,
-  and names stay contiguous (after removing one of Ken's four mods: Outfit I, II, III). Remove a mod
-  whose outfit was the last one selected, launch, open the character select: no stall, and the names
-  follow each other.
-
-## Open problems
-
-- **Online with Ken's Vegeta Majin slot: network error**, while Ryu Outfit I works. The native plugin
-  never saw the game load Ken's Drive Tech outfit, so the error comes before the match loads. To narrow
-  it down: the moment of the error (search, opponent found, versus screen), and whether another Ken
-  mod (Alpha Ken) fails the same way.
+- Online casual match with Ryu Outfit I and with Ken's Vegeta Majin slot, on official REFramework 1.5.8.
+- Removing a mod: the outfit goes away, names stay contiguous, no stall.
+- A character played on trial lists only the installed mods' outfits.
 
 ## Loader paths never triggered by a real mod
 
@@ -45,12 +32,72 @@ folder; the loader rewrites it at every launch where something changed.
 - **Characters owned or not**: a character you do not own (trial) must list only the installed mods'
   outfits, and none of them must stall.
 
-## Online, not tested yet
+## Online, needs two players
 
 - **Your opponent's modded outfit**, mirrored as Drive Tech on your side.
 - **Spectator mode** with modded outfits.
 
-## More mods
+## Mods to try
 
-Any costume mod not in [COMPATIBILITY.md](COMPATIBILITY.md) is untested. Mods from 2023 are the most
-useful to try, since they are the likeliest to be affected by game updates.
+From the community compatibility list, not tested yet with the current loader. Mods marked
+"reported" failed with an earlier version; they are the most useful to retest.
+
+### Reported problems, to retest
+
+- [Dhalsim The Wrestler](https://www.nexusmods.com/streetfighter6/mods/296) (Dhalsim, monkeygigabuster) — reported: loads Drive Tech instead of the mod; the Dhalsim fix should cover it
+- [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) (C. Viper, Lilotty) — reported: loses its colours when the C. Viper C3 body mod is installed
+- [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) (C. Viper, itsB00) — reported: modular mod, did not work in C1 or C2
+- [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) (C. Viper, itsB00 x IrKyZz) — reported: modular mod, did not work in C1 or C2
+- [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) (C. Viper, 24KP) — reported: not detected as a slot of its own (glasses only)
+- [Ingrid as Athena (KOF97)](https://www.nexusmods.com/streetfighter6/mods/3579) (Ingrid, Amaso) — reported: extra Drive Tech entry after the mod, physics wrong
+- [Viper Racer](https://www.nexusmods.com/streetfighter6/mods/3018) (C. Viper, Chewie) — same author as DOA4 Christie and TFD Racer, whose colour files needed an upgrade
+- [Yasmine shorts](https://www.nexusmods.com/streetfighter6/mods/3904) (Yasmine, Jeans22) — reported to crash even without the loader, more on AMD GPUs; try last
+
+### Same families as mods that work (quick confirmations)
+
+- [Jopok Lily](https://www.nexusmods.com/streetfighter6/mods/2995) (Lily, TonKumaTsu)
+- [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) (Cammy, TonKumaTsu)
+- [Ingrid Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3665) (Ingrid, THEJAMK)
+- [Chun Li Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3710) (Chun-Li, THEJAMK)
+- [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) (Cammy, THEJAMK)
+- [Mai Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3712) (Mai, THEJAMK)
+- [Lily Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3716) (Lily, THEJAMK)
+- [Manon Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3717) (Manon, THEJAMK)
+- [Aki Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3718) (A.K.I., THEJAMK)
+- [Minotaur Alex](https://www.nexusmods.com/streetfighter6/mods/3760) (Alex, TonKumaTsu)
+- [Marisa Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3782) (Marisa, THEJAMK)
+- [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) (Dee Jay, TonKumaTsu)
+- [C Viper Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3929) (C. Viper, THEJAMK)
+- [Yasmine Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3930) (Yasmine, THEJAMK)
+- [Marisa Of Silence](https://www.nexusmods.com/streetfighter6/mods/3961) (Marisa, TonKumaTsu)
+
+### Others
+
+- [Oni (Akuma)](https://www.nexusmods.com/streetfighter6/mods/2868) (Akuma, GhostDog)
+- [CVS Shin Akuma Inspired Color](https://www.nexusmods.com/streetfighter6/mods/3988) (Akuma, JAKMM)
+- [SFV ALEX](https://www.nexusmods.com/streetfighter6/mods/3368) (Alex, THEJAMK)
+- [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) (C. Viper, Sleepy Scrub)
+- [C. Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) (C. Viper, usetrial)
+- [C. Viper Trench Coat](https://www.nexusmods.com/streetfighter6/mods/3107) (C. Viper, AntiSky101)
+- [C Viper Classic Tombraider C2](https://www.nexusmods.com/streetfighter6/mods/3126) (C. Viper, usetrial)
+- [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) (C. Viper, GhostDog)
+- [B Style Cammy Bunny Ver](https://www.nexusmods.com/streetfighter6/mods/3917) (Cammy, migerumods)
+- [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) (Dhalsim, Dark Touch Studios)
+- [Ingrid Durst](https://www.nexusmods.com/streetfighter6/mods/3541) (Ingrid, SirCheeseburgur)
+- [More Faithful Midnight Bliss Ingrid](https://www.nexusmods.com/streetfighter6/mods/3573) (Ingrid, Corythan)
+- [Chique Casual Ingrid](https://www.nexusmods.com/streetfighter6/mods/3699) (Ingrid, Amaso)
+- [Ingrid Shiori Novella](https://www.nexusmods.com/streetfighter6/mods/3701) (Ingrid, SirCheeseburgur)
+- [AoD replace Ingrid](https://www.nexusmods.com/streetfighter6/mods/3977) (Ingrid, DolinOfficial)
+- [Lynae replaces Kimberly](https://www.nexusmods.com/streetfighter6/mods/3970) (Kimberly, DolinOfficial)
+- [Lily Angel](https://www.nexusmods.com/streetfighter6/mods/815) (Lily, Haise Sasaki)
+- [Lily Summer Outfit](https://www.nexusmods.com/streetfighter6/mods/1446) (Lily, CrystalMang0)
+- [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) (Lily, SirCheeseburgur)
+- [Lily C1 - Squirrel Girl](https://www.nexusmods.com/streetfighter6/mods/2320) (Lily, HugueKas97)
+- [Lily Jun Kazama Cosplay](https://www.nexusmods.com/streetfighter6/mods/2505) (Lily, SirCheeseburgur)
+- [Lily Zoro Cosplay](https://www.nexusmods.com/streetfighter6/mods/2640) (Lily, SirCheeseburgur)
+- [Changli Feixue SuiSui replace Mai](https://www.nexusmods.com/streetfighter6/mods/3921) (Mai, DolinOfficial)
+- [Yasmine with Shoes C1](https://www.nexusmods.com/streetfighter6/mods/3793) (Yasmine, ZZtaii)
+- [RE9 Grace Ashcroft Outfit for Yasmine C2](https://www.nexusmods.com/streetfighter6/mods/3797) (Yasmine, monkeygigabuster)
+- [Yasmine No Jacket with Shoes C1](https://www.nexusmods.com/streetfighter6/mods/3857) (Yasmine, ZZtaii)
+- [Yasmine Josie Rider Outfit](https://www.nexusmods.com/streetfighter6/mods/3938) (Yasmine, SirCheeseburgur)
+- [Sporty Shorts for Yasmine](https://www.nexusmods.com/streetfighter6/mods/3990) (Yasmine, beanpole_brando)
