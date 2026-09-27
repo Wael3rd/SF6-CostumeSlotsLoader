@@ -313,7 +313,8 @@ template <class T> void put(std::vector<uint8_t>& b, T v) {
 
 bool trim_costume_table(std::vector<uint8_t>& b,
                         const std::unordered_set<uint32_t>& keep_ids,
-                        size_t* kept_records, size_t* removed_records) {
+                        size_t* kept_records, size_t* removed_records,
+                        const std::unordered_map<uint32_t, uint32_t>* message_for_record) {
     if (b.size() < 48 || memcmp(b.data(), "USR\0", 4) != 0) return false;
     const size_t R = (size_t)rd<uint64_t>(b, 32);                    // RSZ block
     if (R + 56 > b.size() || memcmp(b.data() + R, "RSZ\0", 4) != 0) return false;
@@ -357,6 +358,10 @@ bool trim_costume_table(std::vector<uint8_t>& b,
         remap[i] = (uint32_t)root + 1 + (uint32_t)kept.size();
         kept.push_back(i);
     }
+    // Messages of the tail by message id, at their new index
+    std::unordered_map<uint32_t, uint32_t> msg_index;
+    for (uint32_t i : kept)
+        if (type[i] == T_COSTUME_MSG) msg_index[rd<uint32_t>(b, D + start[i])] = remap[i];
     const uint32_t n_arr = rd<uint32_t>(b, D + start[root]);
     std::vector<uint32_t> arr;
     for (uint32_t k = 0; k < n_arr; k++) {
@@ -390,10 +395,18 @@ bool trim_costume_table(std::vector<uint8_t>& b,
         } else {
             uint32_t msg = rd<uint32_t>(b, D + start[i] + COSTUME_REC_MSG);
             if (msg >= ic || remap[msg] == UINT32_MAX) return false;
+            uint32_t new_msg = remap[msg];
+            if (message_for_record) {
+                auto want = message_for_record->find(rd<uint32_t>(b, D + start[i]));
+                if (want != message_for_record->end()) {
+                    auto mi = msg_index.find(want->second);
+                    if (mi != msg_index.end()) new_msg = mi->second;
+                }
+            }
             pad_to(4);
             size_t o = data.size();
             data.insert(data.end(), b.begin() + D + start[i], b.begin() + D + start[i] + COSTUME_REC_SIZE);
-            wr<uint32_t>(data, o + COSTUME_REC_MSG, remap[msg]);
+            wr<uint32_t>(data, o + COSTUME_REC_MSG, new_msg);
         }
     }
     out.insert(out.end(), data.begin(), data.end());

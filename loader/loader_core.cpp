@@ -79,6 +79,17 @@ static const char* STREAM_PFX   = "natives/stm/streaming/product/";
 static const char* ESF_ROOT     = "natives/stm/product/charparam/esf/esf.scn.20";
 static const char* COSTUME_TBL  = "natives/stm/product/cfncontents/onlineshop/fightercostumeuserdata.user.2";
 static const char* COSTUME_MSG  = "natives/stm/product/message/fgm/fighter/fightercostumemessage.msg.21";
+static int roman_to_int(const std::string& s) {
+    auto v = [](char c) { switch (c) { case 'I': return 1; case 'V': return 5; case 'X': return 10;
+                                       case 'L': return 50; case 'C': return 100; case 'D': return 500;
+                                       case 'M': return 1000; } return 0; };
+    int n = 0;
+    for (size_t i = 0; i < s.size(); i++) {
+        int a = v(s[i]), b = (i + 1 < s.size()) ? v(s[i + 1]) : 0;
+        n += (a < b) ? -a : a;
+    }
+    return n;
+}
 static std::string int_to_roman(int n) {
     static const int vals[] =  {1000,900,500,400,100,90,50,40,10,9,5,4,1};
     static const char* syms[] = {"M","CM","D","CD","C","XC","L","XL","X","IX","V","IV","I"};
@@ -92,7 +103,11 @@ static const int   N_OLD_TEX = 1;
 
 // Part of the fingerprint: change it whenever the loader starts producing a different pak, so
 // that installing a new loader regenerates the pak once even if no mod changed.
-static const char* LOADER_BUILD_ID = "2026-09-27-texmips-safewrite";
+// Outfit names follow each other per character in costume number order (Outfit I, II, III...), while a
+// slot keeps its number for good: saved choices and replays name slots by number. Id of the static
+// table's first name message ("Outfit I"), static_meta.json msg_id_base.
+static const uint32_t STATIC_MSG_ID_BASE = 5000;
+static const char* LOADER_BUILD_ID = "2026-09-27-removal";
 
 // ============================================================================
 // Utility
@@ -3173,10 +3188,21 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // Build possession for registry
     registry.possession.clear();
-    std::unordered_map<int, int> fighter_outfit_counter;
+    auto name_outfits = [&]() {
+        std::map<int, std::vector<SlotInfo*>> by_fighter;
+        for (auto& sl : slots) by_fighter[sl.fighter].push_back(&sl);
+        for (auto& [f, v] : by_fighter) {
+            std::sort(v.begin(), v.end(), [](const SlotInfo* a, const SlotInfo* b) {
+                return a->new_costume_no < b->new_costume_no; });
+            for (size_t k = 0; k < v.size(); k++) v[k]->outfit_name = "Outfit " + int_to_roman(int(k) + 1);
+        }
+        for (auto& p : registry.possession)
+            for (auto& sl : slots)
+                if (sl.fighter_dir == p.fighter_dir && sl.new_costume_no == p.costume_no) p.name = sl.outfit_name;
+    };
+    name_outfits();
     for (auto& sl : slots) {
-        int idx = fighter_outfit_counter[sl.fighter]++;
-        std::string roman = int_to_roman(idx + 1);
+        std::string roman = sl.outfit_name.substr(7);
         Possession pos;
         pos.fighter = sl.fighter;
         pos.fighter_dir = sl.fighter_dir;
@@ -3246,6 +3272,35 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                     if (sl.fighter_dir == p.fighter_dir && sl.new_costume_no == p.costume_no) { pos.push_back(p); break; }
             registry.possession = std::move(pos);
             slots = std::move(kept);
+            name_outfits();
+        }
+
+        // Every slot number the static scenes declare gets a scene. A choice saved by the game, or a
+        // replay, can still name the number of a removed or left-out outfit; with no scene there,
+        // loading it stalls (27/09, Ken after removing a mod). Unused numbers get the character's
+        // Outfit 1 scene, stored once per character in the pak.
+        {
+            std::unordered_map<int, std::pair<std::string, std::vector<uint8_t>>> outfit1;
+            for (auto& ci : inv.costumes) {
+                if (ci.costume_no != 0 || ci.scene.empty() || outfit1.count(ci.fighter)) continue;
+                auto sd = ctx.gf.load(ci.scene);
+                if (!sd.empty()) outfit1[ci.fighter] = {ci.fighter_dir, std::move(sd)};
+            }
+            std::set<std::pair<int, int>> used;
+            for (auto& sl : slots) used.insert({sl.fighter, sl.new_costume_no});
+            int n_fallback = 0;
+            for (auto& r : meta.records) {
+                if (used.count({r.fighter, r.costume_no})) continue;
+                auto it = outfit1.find(r.fighter);
+                if (it == outfit1.end()) continue;
+                char nm[48];
+                sprintf(nm, "%sv%02d", it->second.first.c_str(), r.costume_no);
+                std::string p = "natives/stm/product/charparam/esf/" + it->second.first + "/" + nm + ".scn.20";
+                slotcheck::put_file(writer, p, it->second.second);
+                n_fallback++;
+            }
+            printf("  %d unused slot numbers given the Outfit 1 scene (a save or a replay naming a removed outfit shows Outfit 1)\n",
+                   n_fallback);
         }
     }
 
@@ -3272,9 +3327,14 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         // every record of the table, and a reserved slot has no scene to load.
         if (str_ends_with(sf.pak, "fightercostumeuserdata.user.2")) {
             std::unordered_set<uint32_t> keep;
-            for (auto& sl : slots) keep.insert((uint32_t)sl.record_id);
+            std::unordered_map<uint32_t, uint32_t> message_for_record;
+            for (auto& sl : slots) {
+                keep.insert((uint32_t)sl.record_id);
+                message_for_record[(uint32_t)sl.record_id] =
+                    STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
+            }
             size_t kept = 0, removed = 0;
-            if (trim_costume_table(data, keep, &kept, &removed))
+            if (trim_costume_table(data, keep, &kept, &removed, &message_for_record))
                 printf("  costume table: %zu slot records kept, %zu unused ones left out\n", kept, removed);
             else
                 printf("  WARN: costume table layout not recognised, shipped with every reserved record\n");

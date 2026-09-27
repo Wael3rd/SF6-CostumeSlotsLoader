@@ -28,6 +28,12 @@
 - Only the slots in use are declared to the game (a character on trial listed 100 empty outfits).
 - The pak is really written or nothing changes: a game still closing no longer leaves an old pak
   marked up to date.
+- Removing a mod no longer stalls the character select: every unused slot number shows the
+  character's Outfit 1, for a choice saved by the game or a replay that still names it.
+
+### Names
+- Outfit names follow each other per character (Outfit I, II, III) after a mod is removed; each slot
+  keeps its number behind the name, so saved choices and replays stay valid.
 
 ### Log
 - Each slot line shows its outfit name (BrewedVFX).

@@ -46,9 +46,12 @@ size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
 // whose id is in keep_ids. A character the player does not own lists every record of the table,
 // owned or not, so the reserved ones showed up as empty outfits whose missing scene stalled loading.
 // Returns false and leaves data untouched when the layout is not the expected one.
+// message_for_record (may be null): record id -> id of the message (outfit name) the record must show,
+// so that names follow each other per character whatever slot numbers are in use.
 bool trim_costume_table(std::vector<uint8_t>& data,
                         const std::unordered_set<uint32_t>& keep_ids,
-                        size_t* kept_records, size_t* removed_records);
+                        size_t* kept_records, size_t* removed_records,
+                        const std::unordered_map<uint32_t, uint32_t>* message_for_record = nullptr);
 
 // Type signatures of an RSZ user file (.user): the game refuses an instance whose type CRC is not the
 // one of its current build. A game update can change a type's CRC without changing its layout (an enum

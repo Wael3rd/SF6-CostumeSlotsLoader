@@ -4,13 +4,27 @@ Everything below was either fixed without being seen in game yet, or never exerc
 installation. Each item says what to do and what to look for. `SF6_CostumeLoader.log` sits in the game
 folder; the loader rewrites it at every launch where something changed.
 
-## Costumes fixed offline, to look at in game
+## Confirmed in game on 2026-09-27
 
-- **Cammy, DOA4 Christie**: every colour (01 to 10) must show its colours, not a white outfit.
-- **A.K.I., TFD Racer**: same check.
-- **Ken, Alpha Ken (Ripped Gi)**: loads and looks like the mod's screenshot.
-- **Lily, Nico bundle, Outfits I and II**: body not see-through (Outfits III and IV are confirmed).
-- **Ryu, Aloha bundle**: each of the 12 variants, including the no-gloves and no-headband ones.
+- Colours of Cammy DOA4 Christie and A.K.I. TFD Racer, all 10 colours.
+- Alpha Ken (Ripped Gi), Lily Nico Outfits I and II, the 12 Aloha Ryu variants one by one.
+- Replays with modded outfits.
+- Online casual match with Ryu Outfit I (a mod), on official REFramework 1.5.8.
+
+## Fixed, to confirm in game
+
+- **Removing a mod.** Before the fix, removing Alpha Ken (Ripped Gi) left Ken's character select on a
+  missing outfit and navigation stalled. Now every unused slot number shows the character's Outfit 1,
+  and names stay contiguous (after removing one of Ken's four mods: Outfit I, II, III). Remove a mod
+  whose outfit was the last one selected, launch, open the character select: no stall, and the names
+  follow each other.
+
+## Open problems
+
+- **Online with Ken's Vegeta Majin slot: network error**, while Ryu Outfit I works. The native plugin
+  never saw the game load Ken's Drive Tech outfit, so the error comes before the match loads. To narrow
+  it down: the moment of the error (search, opponent found, versus screen), and whether another Ken
+  mod (Alpha Ken) fails the same way.
 
 ## Loader paths never triggered by a real mod
 
@@ -21,7 +35,6 @@ folder; the loader rewrites it at every launch where something changed.
   exiting. If it does not let go within about ten seconds, the log shows
   `ERROR: ... in use by another Street Fighter 6 process` and the costumes stay as they were; the next
   launch must regenerate them. Tested on the bench only.
-- **Removing a mod**: its outfit must disappear on the next launch, without an empty entry left behind.
 
 ## Installation and first launch
 
@@ -32,12 +45,10 @@ folder; the loader rewrites it at every launch where something changed.
 - **Characters owned or not**: a character you do not own (trial) must list only the installed mods'
   outfits, and none of them must stall.
 
-## Online
+## Online, not tested yet
 
-- **Casual match with a modded outfit**, on official REFramework 1.5.8: the match must start and the
-  opponent must see a Drive Tech outfit. Last confirmed before the changes of 2026-09-27.
-- **Your opponent's modded outfit**, mirrored as Drive Tech on your side: not tested.
-- **Replays and spectator mode** with modded outfits: not tested.
+- **Your opponent's modded outfit**, mirrored as Drive Tech on your side.
+- **Spectator mode** with modded outfits.
 
 ## More mods
 
