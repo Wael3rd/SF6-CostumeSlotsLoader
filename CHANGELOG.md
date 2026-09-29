@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.0 (2026-09-29)
+
+- A part the mod made for an older layout of the game is taken over when the outfit's scene takes that part
+  from another costume's folder (Aria for Ingrid: face and hair). The slot gets the mod's part with the
+  original material file of the place it replaces; a material the part names that no file defines is
+  reported in the log and kept as the mod made it. To confirm in game.
+- A mod with a real costume (ten files or more) and a minor entry next to it (two files or less, no
+  texture) no longer gives that entry as an outfit (Athena for Ingrid gave a second, almost original
+  Drive Tech outfit).
+- Other slots are unchanged.
+
 ## 1.7.0 (2026-09-29)
 
 ### Colour swatches (experimental)

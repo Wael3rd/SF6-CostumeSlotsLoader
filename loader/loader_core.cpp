@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-29-swatches";
+static const char* LOADER_BUILD_ID = "2026-09-29-donor2";
 
 // ============================================================================
 // Utility
@@ -1049,6 +1049,9 @@ struct ModCostume {
     std::unordered_map<std::string, ModFileRef> files_shared;
     std::unordered_map<std::string, ModFileRef> files_other;
     std::unordered_map<std::string, ModFileRef> files_scene;   // the costume's own scene, when the mod ships it
+    // Files of the same mod for other costume folders that give no outfit of their own (no body mesh):
+    // parts made for an older layout of the game, used by donate_parts()
+    std::unordered_map<std::string, ModFileRef> files_donor;
 };
 
 // allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
@@ -1110,6 +1113,31 @@ static std::vector<ModCostume> detect_mod_costumes(
     }
     // Reject partial mods: require at least one body mesh (part 01)
     std::vector<ModCostume> result;
+    std::unordered_map<std::string, ModFileRef> donors;
+    if (!allow_partial)
+        for (auto& [k, mc] : groups) {
+            bool body = false;
+            for (auto& [p, mf] : mc.files_in_folder)
+                if (str_ends_with(str_lower(p), ".mesh.230110883")
+                    && p.find("/" + mc.original_folder + "/01/") != std::string::npos) body = true;
+            if (!body) donors.insert(mc.files_in_folder.begin(), mc.files_in_folder.end());
+        }
+    // Athena for Ingrid: 24 files for Outfit 2 and one mesh for Drive Tech: that second entry would be
+    // the Drive Tech outfit with a barely changed body. When a mod has a real costume (ten files or more),
+    // an entry of two files or less with no texture is not an outfit of its own.
+    size_t biggest = 0;
+    for (auto& [k, mc] : groups) biggest = std::max(biggest, mc.files_in_folder.size());
+    for (auto it = groups.begin(); it != groups.end(); ) {
+        bool textures = false;
+        for (auto& [p, mf] : it->second.files_in_folder)
+            if (str_lower(p).find(".tex.") != std::string::npos) textures = true;
+        if (!allow_partial && biggest >= 10 && it->second.files_in_folder.size() <= 2 && !textures) {
+            printf("  minor entry: %s/%s (%zu files, no texture) next to a costume of %zu files, not an outfit of its own\n",
+                   it->second.fighter_dir.c_str(), it->second.original_folder.c_str(),
+                   it->second.files_in_folder.size(), biggest);
+            it = groups.erase(it);
+        } else ++it;
+    }
     for (auto& [k, mc] : groups) {
         bool has_body = false, has_mesh = false;
         for (auto& [p, mf] : mc.files_in_folder) {
@@ -1118,6 +1146,7 @@ static std::vector<ModCostume> detect_mod_costumes(
             if (p.find("/" + mc.original_folder + "/01/") != std::string::npos) has_body = true;
         }
         if (has_body || (allow_partial && has_mesh)) {
+            mc.files_donor = donors;
             result.push_back(std::move(mc));
         } else if (!allow_partial) {
             printf("  partial option: %s/%s (no body mesh in part 01, %zu files)\n",
@@ -1331,6 +1360,125 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
         for (size_t at : v[k].at)
             for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
         printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
+        n++;
+    }
+    return n;
+}
+
+namespace slotcheck {
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+}
+// Meshes taken over by donate_parts(): the slot check does not pair them with a material file (the mod's
+// part may name a material no file defines, on purpose: the game then draws nothing for it)
+static std::unordered_set<std::string> g_donated_meshes;
+
+// A mod made for an older layout of the game puts a part where the game used to keep it. Ingrid's Aria
+// hides her face and hair with a reduced mesh in 000/00 and 001/02, the head and hair of Outfit 1; the
+// Drive Tech scene now takes them from Outfit 2 (002/00, 002/02), so the mod's part was never shown.
+// For each model of the original scene that lives in another costume's folder (not the slot's own, not
+// 000/), the slot takes the mod's part of the same number when the mod has one in 000/ or in a folder
+// that gives no outfit, and no material file of its own: the slot gets the mesh, the original material
+// file of that part, and the scene points at them (same length, in place).
+static int donate_parts(PakWriter& writer, std::unordered_set<std::string>& written_paths,
+                        std::vector<uint8_t>& scene, const ModCostume& mc, const SlotInfo& slot,
+                        PakReader& base_pak, const std::unordered_map<std::string, std::string>& suffixes) {
+    const std::string& fd = slot.fighter_dir;
+    const std::string& old_f = slot.original_folder;
+    const std::string& new_f = slot.new_folder;
+    if (new_f.size() != 3) return 0;
+    const std::string mesh_suf = suffixes.count("mesh") ? suffixes.at("mesh") : "230110883";
+    const std::string mdf_suf = suffixes.count("mdf2") ? suffixes.at("mdf2") : "31";
+    auto refs = scene_model_refs(scene);
+    std::unordered_map<std::string, size_t> by_low;
+    for (size_t i = 0; i < refs.size(); i++) by_low[str_lower(refs[i].text)] = i;
+    auto find_donor = [&](const std::string& part, std::string& donor_path) -> const ModFileRef* {
+        for (auto* files : {&mc.files_shared, &mc.files_donor})
+            for (auto& [path, mf] : *files) {
+                const std::string low = str_lower(path);
+                std::string pf, folder;
+                if (!parse_model_folder(path, pf, folder) || pf != fd || folder == old_f) continue;
+                // the part's mesh: model/esf/<fd>/<folder>/<part>/<fd>_<folder>_<part>.mesh.<version>
+                if (low.find("/" + fd + "/" + folder + "/" + part + "/" + fd + "_" + folder + "_" + part + ".mesh."
+                             + mesh_suf) == std::string::npos) continue;
+                donor_path = path;
+                return &mf;
+            }
+        return nullptr;
+    };
+    int n = 0;
+    for (auto& r : refs) {
+        const std::string low = str_lower(r.text);
+        if (!str_ends_with(low, ".mesh")) continue;
+        std::string pf, folder;
+        const std::string as_path = "natives/stm/" + low + ".x";
+        if (!parse_model_folder(as_path, pf, folder) || pf != fd || folder == old_f || folder == "000") continue;
+        const std::string mid = "/" + fd + "/" + folder + "/";
+        const size_t at = low.find(mid);
+        if (at == std::string::npos) continue;
+        const std::string part = low.substr(at + mid.size(), 2);
+        std::string donor_path;
+        const ModFileRef* donor = find_donor(part, donor_path);
+        if (!donor) continue;
+        // the donor part comes with no material file of its own: the game's one stays
+        const std::string donor_mdf = donor_path.substr(0, donor_path.size() - mesh_suf.size() - 6) + "_v00.mdf2." + mdf_suf;
+        if (mc.files_shared.count(donor_mdf) || mc.files_donor.count(donor_mdf)) continue;
+        // the scene's own material file of that part
+        const std::string mdf_text = r.text.substr(0, r.text.size() - 5) + "_v00.mdf2";
+        auto mi = by_low.find(str_lower(mdf_text));
+        if (mi == by_low.end()) continue;
+        const std::string old_mesh = "natives/stm/" + low + "." + mesh_suf;
+        const std::string old_mdf = "natives/stm/" + str_lower(mdf_text) + "." + mdf_suf;
+        // the part keeps the material file of the place it replaces (the mod was made against it)
+        auto* me = base_pak.find(pak_path_hash(std::string_view(donor_mdf)));
+        if (!me) me = base_pak.find(pak_path_hash(std::string_view(old_mdf)));
+        if (!me) continue;
+        const std::string new_mesh = relocate_path(old_mesh, fd, folder, new_f);
+        const std::string new_mdf = relocate_path(old_mdf, fd, folder, new_f);
+        auto mdata = donor->read_data();
+        // a material the part names that its material file does not define is reported, not refused
+        {
+            std::vector<std::string> need, have;
+            auto vd0 = base_pak.read(*me);
+            if (slotcheck::mesh_materials(mdata, need) && slotcheck::mdf2_materials(vd0, have)) {
+                std::string missing;
+                for (auto& m : need) if (std::find(have.begin(), have.end(), m) == have.end()) missing += (missing.empty() ? "" : ", ") + m;
+                if (!missing.empty())
+                    printf("      part %s of the mod names materials its material file does not define (%s), kept as the mod made it\n",
+                           part.c_str(), missing.c_str());
+            }
+        }
+        // the slot may already hold this very file (the mod's shared part, relocated with the slot); a
+        // different file there is the mod's own part for the slot: leave it
+        if (written_paths.count(new_mesh)) {
+            if (writer.get(pak_path_hash(std::string_view(new_mesh))) != mdata) continue;
+        } else {
+            writer.add_uncompressed(pak_path_hash(std::string_view(new_mesh)), std::move(mdata));
+            written_paths.insert(new_mesh);
+        }
+        {
+            auto vd = base_pak.read(*me);
+            const uint64_t mh = pak_path_hash(std::string_view(new_mdf));
+            std::vector<uint8_t> md(vd.begin(), vd.end());
+            if (writer.find(mh)) writer.replace(mh, std::move(md)); else writer.add_uncompressed(mh, std::move(md));
+            written_paths.insert(new_mdf);
+        }
+        g_donated_meshes.insert(new_mesh);
+        // scene: both references, both occurrences, same length
+        const std::string both[2] = {r.text, mdf_text};
+        for (const std::string* text = both; text != both + 2; ++text) {
+            auto ri = by_low.find(str_lower(*text));
+            if (ri == by_low.end()) continue;
+            std::string nt = *text;
+            auto p1 = nt.find(mid.substr(0)); if (p1 == std::string::npos) p1 = str_lower(nt).find(mid);
+            if (p1 != std::string::npos) nt.replace(p1, mid.size(), "/" + fd + "/" + new_f + "/");
+            auto p2 = str_lower(nt).find(fd + "_" + folder + "_");
+            if (p2 != std::string::npos) nt.replace(p2, (fd + "_" + folder + "_").size(), fd + "_" + new_f + "_");
+            if (nt.size() != text->size()) continue;
+            for (size_t pos : refs[ri->second].at)
+                for (size_t c = 0; c < nt.size(); c++) { scene[pos + 2 * c] = (uint8_t)nt[c]; scene[pos + 2 * c + 1] = 0; }
+        }
+        printf("      donated part %s: %s replaces the scene's %s/%s\n", part.c_str(), donor_path.c_str(), fd.c_str(), folder.c_str());
         n++;
     }
     return n;
@@ -1897,6 +2045,7 @@ static void add_slot_files(PakWriter& writer,
             auto vdata = std::vector<uint8_t>(scene_data.begin(), scene_data.end());
             for (auto& [sp, smf] : mc->files_scene)
                 patched += follow_mod_scene(vdata, smf.read_data(), *mc, base_pak, inv.suffixes);
+            patched += donate_parts(writer, written_paths, vdata, *mc, slot, base_pak, inv.suffixes);
             patch_scene_minimal(vdata, fd, old_f, new_f,
                                 &written_paths, &inv.suffixes);
             // Second pass: patch 000/ references for parts we relocated
@@ -2279,6 +2428,7 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
         // A scene names each resource twice: the second time, a moved reference is already moved
         if (auto mv = moved_mdf.find(mdf_p); mv != moved_mdf.end()) mdf_p = mv->second;
         if (mdf_p.empty() || (!is_slot(mesh_p) && !is_slot(mdf_p))) continue;
+        if (g_donated_meshes.count(mesh_p)) continue;
         std::string why = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
         if (why.empty()) continue;
         if (why.compare(0, 16, "texture missing:") == 0) {
@@ -3843,6 +3993,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::unordered_set<std::string> written_paths;
 
     g_relocated_mod_paths.clear();
+    g_donated_meshes.clear();
     for (auto& sl : slots)
         add_slot_files(writer, written_paths, sl, inv, base_pak, all_mod_files);
 

@@ -29,6 +29,8 @@ The loader therefore does two things at every launch where something changed:
 | Texture whose small levels were sized with fractional blocks (6144x6144 BC7: the 6x6 level declared 36 bytes, 64 written) | The outfit's own part replaced by the original one (Feixue for Mai lost its body, and with it its face) | Rewrites the whole mip table when the table computed from the format fills the file exactly |
 | Mesh whose materials its material file does not define | Loading never completes | Pairs the mesh with another material file of the outfit that defines its materials (a part hidden behind a stripped mesh of another part); else rebuilds the part from the mod's shared `000/` part, else from the original outfit |
 | Mod whose own costume scene points a part at another folder (Mummy Dhalsim's head in `0L/`) | The original part shown (Dhalsim's own head) | Takes over the parts the mod's scene moved, when the file exists and the scene matches the game's |
+| A part a mod made for an older layout of the game, in a folder the outfit's scene no longer uses (Aria for Ingrid hides her face and hair in Outfit 1's folders, Drive Tech takes them from Outfit 2's) | The mod's part is never shown | The slot takes the mod's part of the same number, with the original material file of the place it replaces, and the scene points at it (new in 1.8, to confirm in game) |
+| A mod with a real costume and, next to it, a file or two for another outfit (Athena for Ingrid: one mesh for Drive Tech) | A second entry that is the other outfit almost untouched | The small entry is dropped: it is not an outfit of its own (new in 1.8) |
 | Physics files next to the parts (`esf032_001_02_chain.chain`), where the game keeps them, rather than in a part folder | The new hair or cloth moves with the original outfit's physics, or not at all | Reads the part from the file name and points the slot's physics settings at the mod's files |
 | Model folder shared by two outfits of the character (Dhalsim) | Another outfit shown instead of the mod | Maps the mod to the outfit that owns the folder (the lowest costume number) |
 | Character played on trial, or DLC unlocked by a script | 100 empty outfits, loading stalls on the first one | Only the slots in use are declared to the game |
@@ -77,9 +79,9 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Cammy | [Cammy Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3711) | Works |  |
 | Dee Jay | [Specter Deejay](https://www.nexusmods.com/streetfighter6/mods/3810) | Works |  |
 | Dhalsim | [Dhalsim The Wrestler](https://www.nexusmods.com/streetfighter6/mods/296) | Works | Reported loading Drive Tech with the old loader; fixed by the Dhalsim folder rule |
-| Ingrid | [Ingrid as Athena (KOF97)](https://www.nexusmods.com/streetfighter6/mods/3579) | Works, listed twice | The mod also changes a Drive Tech part, which gives a second entry |
+| Ingrid | [Ingrid as Athena (KOF97)](https://www.nexusmods.com/streetfighter6/mods/3579) | Works | One outfit since 1.8; the Drive Tech mesh it carried made a second entry before |
 | Ingrid | [Chique Casual Ingrid](https://www.nexusmods.com/streetfighter6/mods/3699) | Works | Hair physics since 1.7 (its physics files sit next to the parts) |
-| Ingrid | [AoD replace Ingrid](https://www.nexusmods.com/streetfighter6/mods/3977) | Works | Full replacement: keeps the original colour swatches |
+| Ingrid | [AoD replace Ingrid](https://www.nexusmods.com/streetfighter6/mods/3977) | Works | Full replacement: keeps the original colour swatches. 1.8 also gives it its face and hair parts (to confirm in game) |
 | Mai | [Changli Feixue SuiSui replace Mai](https://www.nexusmods.com/streetfighter6/mods/3921) | Works | Three outfits. Since 1.7: Feixue keeps its body and face (texture tables repaired), Mai's head and hair stay hidden as the mod intends, Changli is no longer left out |
 | Mai | [Viper Racer](https://www.nexusmods.com/streetfighter6/mods/3018) | Works | Mai Racer (listed as a C. Viper mod in the community list) |
 | Manon | [Manon Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3717) | Works |  |

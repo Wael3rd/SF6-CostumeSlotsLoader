@@ -22,6 +22,14 @@ folder; the loader rewrites it at every launch where something changed.
 - Mods whose physics files sit next to the parts now use them (Aloha Ryu, Mummy Dhalsim, the C. Viper
   modular mods, Athena, Manon, Juri, Akuma, Cammy, Mai): nothing broken (2026-09-29).
 
+## New in 1.8, to check in game
+
+- **Ingrid, AoD replace Ingrid (Aria)**: the face and hair parts the mod carries for an older layout are now
+  taken over; its reduced mesh names a material no file defines. Look for the face hidden as the mod intends,
+  and for any freeze on Ingrid's select screen (the log line says `kept as the mod made it`).
+- **Ingrid as Athena**: one outfit, no second Drive Tech entry.
+- Everything else must be unchanged, in particular Mummy Dhalsim's head.
+
 ## New in 1.7, to check in game
 
 - **Colour swatches** (experimental): in the costume menu, the two squares of each colour of a modded
