@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The script does nothing while a fight is running (match, replay, training outside the pause) when the
+  native plugin is there. The signal is the fight clock (`gBattle.Game.stage_timer`) moving; it stops in
+  pause, menus and loading, and the checks come back at once. Before, the save, the costume ownership and
+  the colour clean-up were polled every frame, about 3 fps on a CPU-bound laptop during a replay; now 8 us
+  per frame. Never while the Battle Settings menu is open (its closing must be handled), and without the
+  native plugin the script keeps its in-match role.
+
 ## 1.8.0 (2026-09-29)
 
 - A part the mod made for an older layout of the game is taken over when the outfit's scene takes that part

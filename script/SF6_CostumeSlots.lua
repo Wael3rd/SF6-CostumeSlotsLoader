@@ -11,6 +11,7 @@
 --     reseau = erreur de communication. A la fermeture du menu on note la couleur voulue et on ecrit BASE_COLOR
 --     dans la sauvegarde ; au montage, on echange les donnees de materiaux dans le CCVD. Remis en place au demontage.
 --   * Gate : rien pendant l'ecran de selection (UIFlowUI105*/SelectFighter*).
+--   * Combat : rien du tout tant que le combat tourne (match, replay, training hors pause) si le plugin natif est la.
 --   * Miroir : ne remplacer que le PREMIER holder v04 trouve (limite connue : si l'adversaire a aussi DriveTech
 --     du meme perso, son v04 pourrait etre le premier — a verifier en miroir).
 -- AUCUN hook, tout depuis LateUpdateBehavior.
@@ -672,17 +673,47 @@ local function insert_select_ui()
     return true
 end
 
+-- ---- combat en cours ? l'horloge du decor (gBattle.Game.stage_timer) n'avance que pendant le combat : arretee
+-- en pause, dans les menus et aux chargements. En combat la sauvegarde ne peut pas changer (aucun menu ouvert) et
+-- l'alias en match est celui du plugin natif -> rien a surveiller (mesure 29/09 : ~3 fps en replay sur le G15).
+local f_battle_game = sdk.find_type_definition("gBattle")
+f_battle_game = f_battle_game and f_battle_game:get_field("Game")
+local last_stage_timer = nil
+local function battle_running()
+    local g = f_battle_game and f_battle_game:get_data(nil)
+    local t = g and g:get_field("stage_timer")
+    local running = t ~= nil and last_stage_timer ~= nil and t ~= last_stage_timer
+    last_stage_timer = t
+    return running
+end
+local in_battle = false
+local battle_pauses = 0  -- nombre de suspensions (heartbeat)
+
+local function flush_log()
+    local t = os.time()
+    if dirty and t ~= last_write then last_write = t dirty = false json.dump_file("SF6_CostumeSlots_data/log.json", log) end
+end
+
 -- ---- boucle ----
 local function tick()
     frame = frame + 1
     -- init one-shot : DST et BASE_COLORS avant le premier montage
     if not DST_DONE and frame > 60 and frame % 30 == 0 then pcall(find_dst_all) end
     if not BC_DONE and frame > 80 and frame % 30 == 0 then pcall(read_base_colors) end
+    if not colors_done and frame > 120 then colors_done = true pcall(insert_colors) end
+    if not ui_done and frame > 120 and frame % 60 == 0 then local ok, done = pcall(insert_select_ui) if ok and done then ui_done = true end end
+    -- combat en cours : plus rien jusqu'a la pause ou la fin du combat. Jamais menu ouvert (sa fermeture doit etre
+    -- traitee), jamais sans plugin natif (l'alias en match est alors celui du Lua), et le menu garde la main.
+    if frame % 6 == 0 then
+        local was = in_battle
+        in_battle = not was_open and native_active and battle_running()
+        if in_battle and frame % 30 == 0 and menu_open() then in_battle = false end
+        if in_battle and not was then battle_pauses = battle_pauses + 1 end
+    end
+    if in_battle then flush_log() return end
     -- la possession DLC est effacee par le jeu au passage du titre/login (vu 22/09) -> re-verification periodique
     if frame > 100 and (not own_done or frame % 2 == 0) then own_done = true local oko, erro = pcall(insert_ownership) if not oko and not own_err_logged then own_err_logged = true ev("possession : ERREUR " .. tostring(erro)) end end
-    if not colors_done and frame > 120 then colors_done = true pcall(insert_colors) end
     if colors_done and frame % 30 == 0 then pcall(cleanup_colors) end
-    if not ui_done and frame > 120 and frame % 60 == 0 then local ok, done = pcall(insert_select_ui) if ok and done then ui_done = true end end
     if frame % 6 == 0 then select_gate = select_screen_active() end
     local entries = save_entries()
     if entries then
@@ -741,18 +772,16 @@ local function tick()
             end
         end
     end
-    do
-        local t = os.time()
-        if frame % 600 == 0 then
-            local parts = {}
-            for _, fid in ipairs(FIGHTERS) do
-                local fs = fstate(fid)
-                parts[#parts + 1] = "F" .. fid .. "=" .. tostring(fs.slot)
-            end
-            log.heartbeat = os.date("%H:%M:%S") .. " f" .. frame .. " " .. table.concat(parts, ",") .. " entries=" .. tostring(entries ~= nil) dirty = true
+    if frame % 600 == 0 then
+        local parts = {}
+        for _, fid in ipairs(FIGHTERS) do
+            local fs = fstate(fid)
+            parts[#parts + 1] = "F" .. fid .. "=" .. tostring(fs.slot)
         end
-        if dirty and t ~= last_write then last_write = t dirty = false json.dump_file("SF6_CostumeSlots_data/log.json", log) end
+        log.heartbeat = os.date("%H:%M:%S") .. " f" .. frame .. " " .. table.concat(parts, ",") .. " entries=" .. tostring(entries ~= nil) .. " combats=" .. battle_pauses dirty = true
+        log.gate_dbg = { was_open = was_open, native = native_active, stage_timer = last_stage_timer, in_battle = in_battle, select = select_gate }
     end
+    flush_log()
 end
 
 re.on_pre_application_entry("LateUpdateBehavior", function()
