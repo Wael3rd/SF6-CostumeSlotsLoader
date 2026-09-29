@@ -107,7 +107,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-27-audit";
+static const char* LOADER_BUILD_ID = "2026-09-29-modscene";
 
 // ============================================================================
 // Utility
@@ -866,6 +866,52 @@ static std::string identify_mod_pak(const char* path) {
 }
 
 // ============================================================================
+// Costume scenes shipped by mods
+// ============================================================================
+
+// "natives/stm/product/charparam/esf/esf008/esf008v00.scn.20": the scene of one costume (lowercase path)
+static bool is_costume_scene(const std::string& low) {
+    static const std::string pfx = "natives/stm/product/charparam/esf/esf";
+    if (low.compare(0, pfx.size(), pfx) != 0 || !str_ends_with(low, ".scn.20")) return false;
+    std::string fn = low.substr(low.rfind('/') + 1);
+    return fn.size() == 16 && fn.compare(0, 3, "esf") == 0 && fn[6] == 'v';
+}
+
+// Model references (mesh, mdf2) of a scene, in file order, each once, as written ("Product/Model/...");
+// at = byte offset of every occurrence (a scene names each resource twice)
+struct SceneRef { std::string text; std::vector<size_t> at; };
+static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d) {
+    std::vector<SceneRef> out;
+    std::unordered_map<std::string, size_t> index;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        size_t j = i;
+        std::string s;
+        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+        if (s.empty()) continue;
+        size_t lead = s.find_first_not_of("@ ");
+        if (lead != std::string::npos) {
+            std::string t = s.substr(lead), low = str_lower(t);
+            if (low.compare(0, 14, "product/model/") == 0
+                && (str_ends_with(low, ".mesh") || str_ends_with(low, ".mdf2"))) {
+                auto it = index.find(low);
+                if (it == index.end()) { it = index.emplace(low, out.size()).first; out.push_back({t, {}}); }
+                out[it->second].at.push_back(i + 2 * lead);
+            }
+        }
+        i = j;
+    }
+    return out;
+}
+
+// "Product/Model/.../x.mesh" -> "natives/stm/product/model/.../x.mesh.230110883", or empty
+static std::string scene_ref_pak_path(const std::string& ref, const std::unordered_map<std::string, std::string>& suffixes) {
+    std::string low = str_lower(ref);
+    auto dot = low.rfind('.');
+    auto it = (dot == std::string::npos) ? suffixes.end() : suffixes.find(low.substr(dot + 1));
+    return (it == suffixes.end()) ? std::string() : "natives/stm/" + low + "." + it->second;
+}
+
+// ============================================================================
 // Mod scanning (hash matching + mdf2 texture discovery)
 // ============================================================================
 
@@ -911,6 +957,23 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
             }
         }
     }
+
+    // Model files a costume scene of the mod names outside the game's paths (a part moved to another
+    // folder): named from the scene, so that their textures are discovered below
+    int from_scene = 0;
+    for (auto& [path, mf] : std::unordered_map<std::string,ModFileRef>(known)) {
+        if (!is_costume_scene(str_lower(path))) continue;
+        for (auto& r : scene_model_refs(mf.read_data())) {
+            std::string pp = scene_ref_pak_path(r.text, inv.suffixes);
+            uint64_t h = pp.empty() ? 0 : pak_path_hash(std::string_view(pp));
+            if (h && unknown_set.count(h)) {
+                known[pp] = {&mod_pak, h};
+                unknown_set.erase(h);
+                from_scene++;
+            }
+        }
+    }
+    if (from_scene) printf("    %d model files named by the mod's costume scene\n", from_scene);
 
     // Discover textures via mdf2 parsing
     int discovered = 0;
@@ -977,6 +1040,7 @@ struct ModCostume {
     std::unordered_map<std::string, ModFileRef> files_in_folder;
     std::unordered_map<std::string, ModFileRef> files_shared;
     std::unordered_map<std::string, ModFileRef> files_other;
+    std::unordered_map<std::string, ModFileRef> files_scene;   // the costume's own scene, when the mod ships it
 };
 
 // allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
@@ -1028,6 +1092,12 @@ static std::vector<ModCostume> detect_mod_costumes(
             std::string fn = (sl != std::string::npos) ? p.substr(sl+1) : p;
             if (fn.find(prefix) != std::string::npos)
                 mc.files_other[p] = mf;
+        }
+        // The scene of the costume the mod replaces: it may point a part at other files (follow_mod_scene)
+        if (auto* ci = inv.get_costume(mc.fighter, mc.original_costume_no); ci && !ci->scene.empty()) {
+            std::string want = str_lower(ci->scene);
+            for (auto& [p, mf] : other_files)
+                if (str_lower(p) == want) mc.files_scene[p] = mf;
         }
     }
     // Reject partial mods: require at least one body mesh (part 01)
@@ -1215,6 +1285,48 @@ static std::vector<SlotInfo> assign_slots(
 // instance a texture a DriveTech mod keeps in the C1 folder) must still be written where it is,
 // even when another mod's slot relocates that same folder.
 static std::unordered_set<std::string> g_relocated_mod_paths;
+
+// A mod that ships the scene of the costume it replaces can point a part at other files than the
+// game's scene does: Mummy Dhalsim keeps its head in 001/0L/ instead of 001/00/, so that the game's
+// head file stays as it is. The slot scene is built from the game's scene (a mod's scene may date from
+// an older game version), so only those model references are taken over from the mod's scene, in
+// place, and only when both scenes list the same number of model references, the file exists (in the
+// mod or in the game) and the path keeps its length. The slot relocation then applies as usual.
+static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8_t>& mdata,
+                            const ModCostume& mc, PakReader& base_pak,
+                            const std::unordered_map<std::string, std::string>& suffixes) {
+    auto v = scene_model_refs(vdata), m = scene_model_refs(mdata);
+    if (m.empty()) return 0;
+    if (v.size() != m.size()) {
+        printf("      mod scene: %zu model references against %zu in the game's scene, not followed\n",
+               m.size(), v.size());
+        return 0;
+    }
+    auto exists = [&](const std::string& p) {
+        for (auto* files : {&mc.files_in_folder, &mc.files_shared, &mc.files_other})
+            if (files->count(p)) return true;
+        return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr;
+    };
+    int n = 0;
+    for (size_t k = 0; k < v.size(); k++) {
+        const std::string &vt = v[k].text, &mt = m[k].text;
+        if (str_lower(vt) == str_lower(mt)) continue;
+        std::string target = scene_ref_pak_path(mt, suffixes);
+        if (target.empty() || !exists(target)) {
+            printf("      mod scene: %s -> %s, file not found, not followed\n", vt.c_str(), mt.c_str());
+            continue;
+        }
+        if (mt.size() != vt.size()) {
+            printf("      WARN mod scene: %s -> %s changes the path length, not followed\n", vt.c_str(), mt.c_str());
+            continue;
+        }
+        for (size_t at : v[k].at)
+            for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
+        printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
+        n++;
+    }
+    return n;
+}
 
 static void add_slot_files(PakWriter& writer,
                            std::unordered_set<std::string>& written_paths,
@@ -1757,6 +1869,8 @@ static void add_slot_files(PakWriter& writer,
         if (se) {
             auto scene_data = base_pak.read(*se);
             auto vdata = std::vector<uint8_t>(scene_data.begin(), scene_data.end());
+            for (auto& [sp, smf] : mc->files_scene)
+                patched += follow_mod_scene(vdata, smf.read_data(), *mc, base_pak, inv.suffixes);
             patch_scene_minimal(vdata, fd, old_f, new_f,
                                 &written_paths, &inv.suffixes);
             // Second pass: patch 000/ references for parts we relocated
@@ -2386,7 +2500,8 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
         } else {
             auto sl = item.pak_path.rfind('/');
             std::string fn = (sl != std::string::npos) ? item.pak_path.substr(sl+1) : item.pak_path;
-            bool matched = false;
+            // Files named after a costume folder, and costume scenes (follow_mod_scene)
+            bool matched = is_costume_scene(item.pak_path);
             for (auto& pfx : costume_prefixes) {
                 if (fn.find(pfx) != std::string::npos) { matched = true; break; }
             }
@@ -2410,6 +2525,8 @@ static std::string identify_folder_mod(
     struct E { uint64_t hash; int64_t cs; };
     std::vector<E> entries;
     for (auto& [path, mf] : mod_files) {
+        // Costume scenes were not collected before 2026-09-29: left out so that ids stay the same
+        if (is_costume_scene(path)) continue;
         uint64_t h = pak_path_hash(std::string_view(path));
         uint64_t sz = 0; uint64_t mt = 0;
         if (!mf.disk_path.empty()) file_stat_long(mf.disk_path, sz, mt);

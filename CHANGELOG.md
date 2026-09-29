@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A mod that ships its own costume scene and points a part at another folder gets that part: Mummy
+  Dhalsim showed the original head. Followed only when the file exists and the mod's scene matches the
+  game's (same model references, same path length); otherwise the log says it was not followed.
+- `build.bat` finds Visual Studio or the Build Tools wherever they are installed.
+
 ## 1.6.1 (2026-09-27)
 
 - `reframework\costume_mods\SF6_CostumeAudit.bat`: lists what is installed (loader, REFramework, script,

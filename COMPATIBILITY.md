@@ -27,6 +27,7 @@ The loader therefore does two things at every launch where something changed:
 | Colour files in the 2023 layout (no fur block per garment) | Whole costume white | Converts them to the current layout, with the game's own disabled fur block |
 | Texture whose mip table declares a wrong row pitch | Loading never completes | Rewrites the pitch (the image data is left as is) |
 | Mesh whose materials its material file does not define | Loading never completes | Rebuilds the part from the mod's shared `000/` part, else from the original outfit |
+| Mod whose own costume scene points a part at another folder (Mummy Dhalsim's head in `0L/`) | The original part shown (Dhalsim's own head) | Takes over the parts the mod's scene moved, when the file exists and the scene matches the game's |
 | Model folder shared by two outfits of the character (Dhalsim) | Another outfit shown instead of the mod | Maps the mod to the outfit that owns the folder (the lowest costume number) |
 | Character played on trial, or DLC unlocked by a script | 100 empty outfits, loading stalls on the first one | Only the slots in use are declared to the game |
 | A Street Fighter 6 still closing holds the old pak | Old costumes kept for good | Waits for it, and if it does not let go, changes nothing and retries at the next launch |
@@ -59,7 +60,7 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Cammy | [DOA4 Christie](https://www.nexusmods.com/streetfighter6/mods/3166) | Works | Colour files upgraded; the costume was white before, all 10 colours now show |
 | Lily | [Nico bundle](https://www.nexusmods.com/streetfighter6/mods/78) | Works | Outfits with hair and weapon add-ons, weapons follow the slot |
 | Zangief | [Specter Zangief](https://www.nexusmods.com/streetfighter6/mods/3816) | Works | |
-| Dhalsim | [Mummy Dhalsim](https://www.nexusmods.com/streetfighter6/mods/3645) | Works | |
+| Dhalsim | [Mummy Dhalsim](https://www.nexusmods.com/streetfighter6/mods/3645) | Works | Its head lives in its own folder, named by its scene: showed the original head before 2026-09-29 |
 | Juri | [Oni Juri](https://www.nexusmods.com/streetfighter6/mods/3900) | Works | |
 | Juri | [Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3781) | Works | Together with Oni Juri, in either order |
 | A.K.I. | [TFD Racer](https://www.nexusmods.com/streetfighter6/mods/3084) | Works | Same colour-file problem as Christie, fixed the same way |
