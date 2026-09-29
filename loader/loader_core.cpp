@@ -24,6 +24,8 @@
 #include <chrono>
 #include <memory>
 #include <functional>
+#include <array>
+#include <cmath>
 
 #define NOMINMAX
 #include <windows.h>
@@ -107,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-29-modscene";
+static const char* LOADER_BUILD_ID = "2026-09-29-swatches";
 
 // ============================================================================
 // Utility
@@ -299,6 +301,7 @@ struct RegSlot {
 struct Possession {
     int fighter=0, costume_no=0, record_id=0, manage_id=0;
     std::string fighter_dir, name;
+    std::string swatches;   // JSON array, colours 1-10: [c0,c1] or null (swatch::compute)
 };
 
 struct Registry {
@@ -390,6 +393,10 @@ static Registry load_registry(const char* path) {
             if (line.find("record_id") != std::string::npos) cur_poss.record_id = json_int(line, "record_id");
             if (line.find("manage_id") != std::string::npos) cur_poss.manage_id = json_int(line, "manage_id");
             if (line.find("\"name\"") != std::string::npos) cur_poss.name = json_str(line, "name");
+            if (line.find("\"swatches\"") != std::string::npos) {
+                auto a = line.find('['), b = line.rfind(']');
+                if (a != std::string::npos && b != std::string::npos && b > a) cur_poss.swatches = line.substr(a, b - a + 1);
+            }
             if (line.find('}') != std::string::npos) { reg.possession.push_back(cur_poss); state = IN_POSS; }
         }
     }
@@ -433,7 +440,8 @@ static void save_registry(const char* path, const Registry& reg) {
         fprintf(f, "      \"costume_no\": %d,\n", p.costume_no);
         fprintf(f, "      \"record_id\": %d,\n", p.record_id);
         fprintf(f, "      \"manage_id\": %d,\n", p.manage_id);
-        fprintf(f, "      \"name\": \"%s\"\n", p.name.c_str());
+        fprintf(f, "      \"name\": \"%s\"%s\n", p.name.c_str(), p.swatches.empty() ? "" : ",");
+        if (!p.swatches.empty()) fprintf(f, "      \"swatches\": %s\n", p.swatches.c_str());
         fprintf(f, "    }%s\n", i+1 < reg.possession.size() ? "," : "");
     }
     fprintf(f, "  ]\n}\n");
@@ -1669,6 +1677,14 @@ static void add_slot_files(PakWriter& writer,
                     auto rsl = rest.find('/');
                     if (rsl != std::string::npos)
                         mod_chain_parts.insert(rest.substr(0, rsl));
+                    else {
+                        // Next to the parts, where the game keeps them: the part is in the name
+                        // (esf032_001_02_chain.chain: part 02, Chique Casual Ingrid's hair)
+                        std::string pfx = fd + "_" + old_f + "_";
+                        auto us = fn.find('_', pfx.size());
+                        if (fn.compare(0, pfx.size(), pfx) == 0 && us != std::string::npos && us > pfx.size())
+                            mod_chain_parts.insert(fn.substr(pfx.size(), us - pfx.size()));
+                    }
                 }
             }
         }
@@ -1689,17 +1705,27 @@ static void add_slot_files(PakWriter& writer,
                 if (oe) cu_data = base_pak.read(*oe);
             }
             if (cu_data.empty()) continue;
-            // Patch internal dir ref: fd/old_f/part/ -> fd/new_f/part/
-            std::string old_ds = fd + "/" + old_f + "/" + part + "/";
-            std::string new_ds = fd + "/" + new_f + "/" + part + "/";
+            // Point the copy at the chain files the slot relocated: fd/old_f/ -> fd/new_f/ (dir only,
+            // chain files keep their name), in the part folder or next to it, and only where the
+            // relocated file exists
+            std::string old_ds = fd + "/" + old_f + "/";
+            std::string new_ds = fd + "/" + new_f + "/";
             std::vector<uint8_t> old_d16, new_d16;
             for (char c : old_ds) { old_d16.push_back((uint8_t)c); old_d16.push_back(0); }
             for (char c : new_ds) { new_d16.push_back((uint8_t)c); new_d16.push_back(0); }
             for (size_t ci = 0; ci + old_d16.size() <= cu_data.size(); ) {
-                if (memcmp(cu_data.data()+ci, old_d16.data(), old_d16.size()) == 0) {
-                    memcpy(cu_data.data()+ci, new_d16.data(), new_d16.size());
-                    ci += old_d16.size();
-                } else ci += 2;
+                if (memcmp(cu_data.data()+ci, old_d16.data(), old_d16.size()) != 0) { ci += 2; continue; }
+                size_t s0 = ci;
+                while (s0 >= 2 && !(cu_data[s0 - 2] == 0 && cu_data[s0 - 1] == 0)) s0 -= 2;
+                std::string ref;
+                for (size_t j = s0; j + 1 < cu_data.size() && (cu_data[j] || cu_data[j + 1]); j += 2)
+                    ref += (char)cu_data[j];
+                ref.replace((ci - s0) / 2, old_ds.size(), new_ds);
+                while (!ref.empty() && (ref[0] == '@' || ref[0] == ' ')) ref.erase(0, 1);
+                std::string target = scene_ref_pak_path(ref, inv.suffixes);
+                if (!target.empty() && written_paths.count(target))
+                    memcpy(cu_data.data() + ci, new_d16.data(), new_d16.size());
+                ci += old_d16.size();
             }
             uint64_t th = pak_path_hash(std::string_view(cu_target));
             writer.add_uncompressed(th, std::move(cu_data));
@@ -2243,12 +2269,15 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
     }
 
     // 2. Each mesh with the material file that follows it
+    std::unordered_map<std::string, std::string> moved_mdf;   // material references moved below
     for (size_t i = 0; i < refs.size(); i++) {
         const std::string& mesh_p = refs[i];
         if (!str_ends_with(mesh_p, (".mesh." + mesh_suf).c_str())) continue;
         std::string mdf_p;
         for (size_t j = i + 1; j < refs.size(); j++)
             if (str_ends_with(refs[j], (".mdf2." + mdf_suf).c_str())) { mdf_p = refs[j]; break; }
+        // A scene names each resource twice: the second time, a moved reference is already moved
+        if (auto mv = moved_mdf.find(mdf_p); mv != moved_mdf.end()) mdf_p = mv->second;
         if (mdf_p.empty() || (!is_slot(mesh_p) && !is_slot(mdf_p))) continue;
         std::string why = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
         if (why.empty()) continue;
@@ -2268,6 +2297,48 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
         std::string part = mesh_p.substr(sd + slot_dir.size());
         part = part.substr(0, part.find('/'));
         const bool mdf_is_slot = is_slot(mdf_p);
+
+        // The mod's mesh with another material file of the scene that defines its materials. Mods
+        // hide a part of the original outfit behind a stripped mesh of another part (Changli, Feixue
+        // and SuiSui for Mai: a reduced head in the hair part, which keeps the hair's material file).
+        // The part gets a copy of that material file, in the slot folder.
+        if (why.find("materials of the mesh not in its material file") != std::string::npos) {
+            auto mesh = c.gf.load(mesh_p);
+            bool paired = false;
+            for (auto& other : refs) {
+                if (other == mdf_p || !str_ends_with(other, (".mdf2." + mdf_suf).c_str())) continue;
+                auto od = c.gf.load(other);
+                if (!pair_problem(c, mesh, od).empty()) continue;
+                std::string dst = mdf_p;
+                if (!mdf_is_slot) {
+                    // Scene: the part's material reference moves to the slot folder (same length)
+                    std::string src_f, sfd;
+                    if (!parse_model_folder(mdf_p, sfd, src_f)) continue;
+                    dst = relocate_path(mdf_p, fd, src_f, new_f);
+                    std::string oref = mdf_p.substr(strlen("natives/stm/"));
+                    oref = oref.substr(0, oref.rfind('.'));
+                    std::string nref = relocate_path(oref, fd, src_f, new_f);
+                    int moved = 0;
+                    for (size_t i = 0; i + 2 * oref.size() <= scene.size(); i += 2) {
+                        bool eq = true;
+                        for (size_t k = 0; k < oref.size() && eq; k++)
+                            eq = scene[i + 2 * k + 1] == 0 && tolower(scene[i + 2 * k]) == oref[k];
+                        if (!eq) continue;
+                        for (size_t k = 0; k < nref.size(); k++)
+                            if (tolower(scene[i + 2 * k]) != nref[k]) scene[i + 2 * k] = (uint8_t)nref[k];
+                        moved++;
+                    }
+                    if (!moved) continue;
+                    put_file(*c.gf.writer, scene_p, scene);
+                    moved_mdf[mdf_p] = dst;
+                }
+                put_file(*c.gf.writer, dst, std::move(od));
+                printf("      check: part %s (%s) given the material file of %s\n", part.c_str(), why.c_str(), other.c_str());
+                paired = true;
+                break;
+            }
+            if (paired) continue;
+        }
 
         // Candidates: the mod's shared 000/ part, then the original costume's part
         struct Cand { const char* label; std::vector<uint8_t> mesh, mdf; };
@@ -2308,6 +2379,131 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
 }
 
 }  // namespace slotcheck
+
+// ============================================================================
+// Colour swatches of the select screen
+// ============================================================================
+// The two squares next to each colour are picked by hand by Capcom for its own outfits: more than
+// half of them match no tint of the outfit (research of 2026-09-29, docs/CHANTIER_COSTUME_SLOTS.md).
+// For a slot they are the tints of the outfit's two largest colour zones. A zone is a customize colour
+// of a material cluster in the colour file (cmd_001..010 = colours 1 to 10); its size is the mean of its
+// channel in the material's colour mask (CustomizeColor_Mask: tints 1-4, CustomizeColor_Mask2: 5-8), on
+// a small mip level. Skin, eyes and the like are left out; close tints add up; the two squares differ.
+
+namespace swatch {
+
+static bool is_skin(const std::string& name) {
+    static const char* words[] = {"body", "skin", "eye", "head", "teeth", "tear", "lash", "brow", "mouth", "nail", "face"};
+    std::string n = str_lower(name);
+    for (auto* w : words) if (n.find(w) != std::string::npos) return true;
+    return false;
+}
+
+static std::string u16_at(const std::vector<uint8_t>& b, uint64_t o) {
+    std::string s;
+    for (size_t k = size_t(o); o && k + 1 < b.size(); k += 2) {
+        const uint16_t c = uint16_t(b[k] | (b[k + 1] << 8));
+        if (!c) break;
+        s += char(c);
+    }
+    return s;
+}
+
+// Materials of a material file (.mdf2.31) with their two colour masks (resource paths, may be empty)
+struct MatMasks { std::string name, mask1, mask2; };
+static void mdf2_masks(const std::vector<uint8_t>& b, std::vector<MatMasks>& out) {
+    if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return;
+    int16_t count; memcpy(&count, b.data() + 6, 2);
+    for (int i = 0; i < count && 16 + 100ull * (i + 1) <= b.size(); i++) {
+        const size_t h = 16 + 100ull * i;
+        uint64_t name_off, tex_off; uint32_t tex_count;
+        memcpy(&name_off, b.data() + h, 8); memcpy(&tex_count, b.data() + h + 20, 4); memcpy(&tex_off, b.data() + h + 60, 8);
+        MatMasks m; m.name = u16_at(b, name_off);
+        for (uint32_t t = 0; t < tex_count && tex_off + 32ull * (t + 1) <= b.size(); t++) {
+            uint64_t type_off, path_off;
+            memcpy(&type_off, b.data() + tex_off + 32ull * t, 8); memcpy(&path_off, b.data() + tex_off + 32ull * t + 16, 8);
+            const std::string type = u16_at(b, type_off);
+            if (type == "CustomizeColor_Mask") m.mask1 = u16_at(b, path_off);
+            else if (type == "CustomizeColor_Mask2") m.mask2 = u16_at(b, path_off);
+        }
+        out.push_back(std::move(m));
+    }
+}
+
+// "[[c0,c1],...]" for colours 1 to 10 (null where the colour file is missing), each square an RGBA
+// value as via.Color stores it (R in the low byte)
+// folder: where the colour files are; name_folder: the folder their names carry (a slot keeps the
+// original names, the ones its colour variation data references: esf030/007/esf030_001_cmd_001)
+static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p, const std::string& fd,
+                           const std::string& folder, const std::string& name_folder,
+                           const std::unordered_map<std::string, std::string>& suffixes,
+                           int* colours_done = nullptr) {
+    auto scene = gf.load(scene_p);
+    std::map<std::string, std::array<float, 8>> cov;
+    std::set<std::string> seen;
+    for (auto& s : slotcheck::utf16_strings(scene)) {
+        std::string p = slotcheck::resource_path(s, suffixes);
+        if (p.empty() || !str_ends_with(p, ".mdf2.31") || !seen.insert(p).second) continue;
+        std::vector<MatMasks> mats;
+        mdf2_masks(gf.load(p), mats);
+        for (auto& m : mats) {
+            if (is_skin(m.name)) continue;
+            std::array<float, 8> v{};
+            for (int j = 0; j < 2; j++) {
+                const std::string& ref = j ? m.mask2 : m.mask1;
+                float mean[4];
+                if (!ref.empty() && texture_channel_means(gf.load(scene_ref_pak_path(ref, suffixes)), mean))
+                    for (int k = 0; k < 4; k++) v[j * 4 + k] = mean[k];
+            }
+            cov[m.name] = v;
+        }
+    }
+    auto user_ver = suffixes.count("user") ? suffixes.at("user") : std::string("2");
+    auto dist = [](uint32_t a, uint32_t b) {
+        double s = 0;
+        for (int c = 0; c < 3; c++) { double d = double((a >> (8 * c)) & 0xFF) - double((b >> (8 * c)) & 0xFF); s += d * d; }
+        return std::sqrt(s);
+    };
+    std::string json = "[";
+    for (int idx = 0; idx < 10; idx++) {
+        char tail[48]; snprintf(tail, sizeof tail, "_cmd_%03d.user.", idx + 1);
+        std::vector<CmdCluster> clusters;
+        const std::string dir = "natives/stm/product/model/esf/" + fd + "/" + folder + "/" + fd + "_";
+        auto cmd = gf.load(dir + name_folder + tail + user_ver);
+        if (cmd.empty() && name_folder != folder) cmd = gf.load(dir + folder + tail + user_ver);
+        cmd_tints(cmd, clusters);
+        struct G { uint32_t c; double w; };
+        std::vector<G> groups;
+        for (auto& cl : clusters) {
+            auto it = cov.find(cl.name);
+            if (it == cov.end()) continue;
+            for (size_t k = 0; k < cl.colors.size() && k < 8; k++) {
+                const double w = it->second[k];
+                if (!cl.colors[k].first || w <= 0) continue;
+                const uint32_t c = cl.colors[k].second | 0xFF000000u;
+                bool merged = false;
+                for (auto& g : groups) if (dist(g.c, c) < 25) { g.w += w; merged = true; break; }
+                if (!merged) groups.push_back({c, w});
+            }
+        }
+        std::stable_sort(groups.begin(), groups.end(), [](const G& a, const G& b) { return a.w > b.w; });
+        std::vector<uint32_t> pick;
+        for (auto& g : groups) {
+            bool distinct = true;
+            for (uint32_t p : pick) if (dist(p, g.c) <= 40) { distinct = false; break; }
+            if (distinct) pick.push_back(g.c);
+            if (pick.size() == 2) break;
+        }
+        if (idx) json += ",";
+        if (pick.empty()) { json += "null"; continue; }
+        if (pick.size() == 1) pick.push_back(pick[0]);
+        json += "[" + std::to_string(pick[0]) + "," + std::to_string(pick[1]) + "]";
+        if (colours_done) (*colours_done)++;
+    }
+    return json + "]";
+}
+
+}  // namespace swatch
 
 
 // ============================================================================
@@ -3369,6 +3565,44 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
     logf("  %zu costumes, %zu hashes\n", inv.costumes.size(), inv.all_hashes.size());
 
+    {
+        char test_out[MAX_PATH];
+        DWORD tn = GetEnvironmentVariableA("SF6_COSTUME_SWATCH_TEST", test_out, MAX_PATH);
+        if (tn > 0 && tn < MAX_PATH) {
+            PakWriter empty;
+            slotcheck::GameFiles gf;
+            gf.writer = &empty;
+            std::vector<std::unique_ptr<PakReader>> extra;
+            for (const std::string& pattern : {game_dir + "\\dlc\\*.pak", game_dir + "\\re_dlc_*.pak"}) {
+                WIN32_FIND_DATAA fdta;
+                HANDLE fh = FindFirstFileA(pattern.c_str(), &fdta);
+                if (fh == INVALID_HANDLE_VALUE) continue;
+                std::string dir = pattern.substr(0, pattern.rfind('\\') + 1);
+                do {
+                    auto r = std::make_unique<PakReader>();
+                    if (r->open((dir + fdta.cFileName).c_str())) extra.push_back(std::move(r));
+                } while (FindNextFileA(fh, &fdta));
+                FindClose(fh);
+            }
+            PakReader base_pak;
+            if (!base_pak.open(base_path.c_str())) { log_close(); return 1; }
+            gf.paks.push_back(&base_pak);
+            for (auto& r : extra) gf.paks.push_back(r.get());
+            FILE* tf = fopen(test_out, "wb");
+            if (tf) {
+                for (auto& ci : inv.costumes) {
+                    if (ci.model_dir.empty() || ci.scene.empty()) continue;
+                    std::string folder = ci.model_dir.substr(ci.model_dir.rfind('/') + 1);
+                    fprintf(tf, "%s %d %s\n", ci.fighter_dir.c_str(), ci.costume_no,
+                            swatch::compute(gf, ci.scene, ci.fighter_dir, folder, folder, inv.suffixes).c_str());
+                }
+                fclose(tf);
+            }
+            log_close();
+            return 0;
+        }
+    }
+
     // 2. Load static meta
     std::string meta_path = static_dir + "\\static_meta.json";
     StaticMeta meta;
@@ -3474,6 +3708,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
     logf("  %zu entries\n", base_pak.entry_count());
     load_current_crcs(base_pak);
+
 
     // 5. Scan each mod pak
     std::vector<std::pair<std::string, std::vector<ModCostume>>> mods_with_costumes;
@@ -3660,6 +3895,23 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             registry.possession = std::move(pos);
             slots = std::move(kept);
             name_outfits();
+        }
+
+        // Colour swatches of the select screen, from each slot's own colour files and masks
+        {
+            int with = 0, colours = 0;
+            for (auto& p : registry.possession)
+                for (auto& sl : slots)
+                    if (sl.fighter_dir == p.fighter_dir && sl.new_costume_no == p.costume_no) {
+                        int n = 0;
+                        p.swatches = swatch::compute(ctx.gf, "natives/stm/product/charparam/esf/" + sl.fighter_dir + "/"
+                                                     + sl.scene_name + ".scn.20", sl.fighter_dir, sl.new_folder,
+                                                     sl.original_folder, inv.suffixes, &n);
+                        if (n) with++;
+                        colours += n;
+                        break;
+                    }
+            printf("  colour swatches: %d colours for %d slots\n", colours, with);
         }
 
         // Every slot number the static scenes declare gets a scene. A choice saved by the game, or a

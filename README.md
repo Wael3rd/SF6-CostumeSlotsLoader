@@ -45,6 +45,16 @@ with the outfits each one gave, then the extra outfits by character. The report 
 - Variants share most of their files, and the generated pak stores identical data only once.
 - Broken, password-protected or unrelated archives are skipped and reported in `SF6_CostumeLoader.log`.
 
+## Colour swatches (experimental)
+
+The costume menu shows two small squares next to each colour. Capcom picks them by hand for its own outfits,
+so they cannot be read from a mod. Since 1.7 the loader computes them for every modded outfit: the tints of
+the outfit's two largest colour zones, taken from the mod's own colour files and colour masks. Measured on
+the game's own outfits, the result looks like the outfit (vivid colours, the right family most of the time,
+sometimes the other way round) but is not what Capcom would have picked. This is a trial and may be removed.
+An outfit whose materials do not use the game's colour system (a full character replacement) keeps the
+squares of the original outfit, as before 1.7.
+
 ## How it works
 
 The game imports `amd_ags_x64.dll` from its own folder, so a proxy with that name is mapped into the process
@@ -59,7 +69,7 @@ before any engine code runs. That is the moment the loader does its work:
 4. It reads every slot back the way the game will load it, repairs what cannot load, and leaves out a slot it
    cannot repair instead of letting it stall the game. Only the slots in use are declared to the game.
 5. It writes a registry that the Lua script and the native plugin read to make the slots selectable and, online,
-   to show the other players a legal outfit.
+   to show the other players a legal outfit. The registry also carries each slot's colour swatches.
 
 A fingerprint of the installed mods is kept, so a launch with nothing changed costs about 20 ms. A launch after
 installing or removing a mod takes a few seconds, up to about fifteen with many large archives.

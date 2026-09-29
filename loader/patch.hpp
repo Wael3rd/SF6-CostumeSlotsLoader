@@ -53,6 +53,15 @@ bool trim_costume_table(std::vector<uint8_t>& data,
                         size_t* kept_records, size_t* removed_records,
                         const std::unordered_map<uint32_t, uint32_t>* message_for_record = nullptr);
 
+// Colour tints of a costume colour file (cmd_*.user): each material cluster in file order, with its
+// customize colours (enabled flag, RGBA packed as the file stores it: R in the low byte).
+struct CmdCluster { std::string name; std::vector<std::pair<bool, uint32_t>> colors; };
+bool cmd_tints(const std::vector<uint8_t>& data, std::vector<CmdCluster>& out);
+
+// Mean of each channel (0..1, RGBA) of a block-compressed texture over its first mip level whose sides
+// are both 64 or less (BC1, BC3, BC4, BC5, BC7). False when that level is missing or smaller than 4x4.
+bool texture_channel_means(const std::vector<uint8_t>& tex, float out[4]);
+
 // Type signatures of an RSZ user file (.user): the game refuses an instance whose type CRC is not the
 // one of its current build. A game update can change a type's CRC without changing its layout (an enum
 // that gains values); mod files made before it then load without their data.

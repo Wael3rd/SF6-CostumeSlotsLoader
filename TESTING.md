@@ -17,6 +17,17 @@ folder; the loader rewrites it at every launch where something changed.
 - C. Viper Swimsuit and Lace Lingerie as 8 outfits each, and Outfit 2 without glasses.
 - A costume and an add-on from two archives combined by putting them in one sub-folder (Ken SFV
   style + Ken SFV Hair).
+- Mummy Dhalsim's own head; Changli, Feixue and SuiSui for Mai; Chique Casual Ingrid's hair physics;
+  AoD replace Ingrid (2026-09-29).
+- Mods whose physics files sit next to the parts now use them (Aloha Ryu, Mummy Dhalsim, the C. Viper
+  modular mods, Athena, Manon, Juri, Akuma, Cammy, Mai): nothing broken (2026-09-29).
+
+## New in 1.7, to check in game
+
+- **Colour swatches** (experimental): in the costume menu, the two squares of each colour of a modded
+  outfit should differ from colour to colour and look like the outfit; the original outfits must keep
+  Capcom's squares. The Lua log (`reframework\data\SF6_CostumeSlots_data\log.json`) reports
+  `pastilles propres=N`, the number of colours given their own squares.
 
 ## Loader paths never triggered by a real mod
 
@@ -63,8 +74,8 @@ as broken with earlier versions have all been retested (see COMPATIBILITY.md).
 
 ### Others
 
-- [Oni (Akuma)](https://www.nexusmods.com/streetfighter6/mods/2868) (Akuma, GhostDog)
-- [CVS Shin Akuma Inspired Color](https://www.nexusmods.com/streetfighter6/mods/3988) (Akuma, JAKMM)
+- [Oni (Akuma)](https://www.nexusmods.com/streetfighter6/mods/2868) (Akuma, GhostDog): generates without warnings; its
+  Color Previews add-on (the select-screen squares only) is not needed since the loader computes them
 - [SFV ALEX](https://www.nexusmods.com/streetfighter6/mods/3368) (Alex, THEJAMK)
 - [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) (C. Viper, Sleepy Scrub)
 - [C. Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) (C. Viper, usetrial)
@@ -72,12 +83,10 @@ as broken with earlier versions have all been retested (see COMPATIBILITY.md).
 - [C Viper Classic Tombraider C2](https://www.nexusmods.com/streetfighter6/mods/3126) (C. Viper, usetrial)
 - [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) (C. Viper, GhostDog)
 - [B Style Cammy Bunny Ver](https://www.nexusmods.com/streetfighter6/mods/3917) (Cammy, migerumods)
-- [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) (Dhalsim, Dark Touch Studios)
+- [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) (Dhalsim, Dark Touch Studios): generates without warnings
 - [Ingrid Durst](https://www.nexusmods.com/streetfighter6/mods/3541) (Ingrid, SirCheeseburgur)
 - [More Faithful Midnight Bliss Ingrid](https://www.nexusmods.com/streetfighter6/mods/3573) (Ingrid, Corythan)
-- [Chique Casual Ingrid](https://www.nexusmods.com/streetfighter6/mods/3699) (Ingrid, Amaso)
 - [Ingrid Shiori Novella](https://www.nexusmods.com/streetfighter6/mods/3701) (Ingrid, SirCheeseburgur)
-- [AoD replace Ingrid](https://www.nexusmods.com/streetfighter6/mods/3977) (Ingrid, DolinOfficial)
 - [Lynae replaces Kimberly](https://www.nexusmods.com/streetfighter6/mods/3970) (Kimberly, DolinOfficial)
 - [Lily Angel](https://www.nexusmods.com/streetfighter6/mods/815) (Lily, Haise Sasaki)
 - [Lily Summer Outfit](https://www.nexusmods.com/streetfighter6/mods/1446) (Lily, CrystalMang0)
@@ -85,7 +94,6 @@ as broken with earlier versions have all been retested (see COMPATIBILITY.md).
 - [Lily C1 - Squirrel Girl](https://www.nexusmods.com/streetfighter6/mods/2320) (Lily, HugueKas97)
 - [Lily Jun Kazama Cosplay](https://www.nexusmods.com/streetfighter6/mods/2505) (Lily, SirCheeseburgur)
 - [Lily Zoro Cosplay](https://www.nexusmods.com/streetfighter6/mods/2640) (Lily, SirCheeseburgur)
-- [Changli Feixue SuiSui replace Mai](https://www.nexusmods.com/streetfighter6/mods/3921) (Mai, DolinOfficial)
 - [Yasmine with Shoes C1](https://www.nexusmods.com/streetfighter6/mods/3793) (Yasmine, ZZtaii)
 - [RE9 Grace Ashcroft Outfit for Yasmine C2](https://www.nexusmods.com/streetfighter6/mods/3797) (Yasmine, monkeygigabuster)
 - [Yasmine No Jacket with Shoes C1](https://www.nexusmods.com/streetfighter6/mods/3857) (Yasmine, ZZtaii)

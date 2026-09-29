@@ -1,11 +1,31 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 (2026-09-29)
 
-- A mod that ships its own costume scene and points a part at another folder gets that part: Mummy
-  Dhalsim showed the original head. Followed only when the file exists and the mod's scene matches the
-  game's (same model references, same path length); otherwise the log says it was not followed.
+### Colour swatches (experimental)
+- The two squares shown next to each colour in the costume menu are computed for every modded outfit: the
+  tints of its two largest colour zones, from the mod's own colour files and colour masks, instead of the
+  original outfit's squares. Capcom picks its squares by hand, so the result looks like the outfit without
+  matching what Capcom would have chosen. This is a trial and may be removed. Outfits whose materials do
+  not use the game's colour system keep the original squares.
+
+### Compatibility
+- A mod that ships its own costume scene and points a part at another folder gets that part: Mummy Dhalsim
+  showed the original head. Followed only when the file exists and the mod's scene matches the game's
+  (same model references, same path length); otherwise the log says it was not followed.
+- Textures whose small mip levels were sized with fractional blocks are repaired as a whole (Feixue for
+  Mai lost its body and face). The mip table is rewritten only when the one computed from the format
+  fills the file exactly.
+- A part hidden behind a stripped mesh of another part keeps that mesh, paired with a material file that
+  defines its materials, instead of getting the original part back (Mai's hair on Feixue and SuiSui) or
+  being left out (Changli).
+- Physics files kept next to the parts, where the game keeps them, are followed: the slot's physics
+  settings point at the mod's files (Chique Casual Ingrid's hair). Every mod laid out that way now uses its
+  own physics.
+
+### Building
 - `build.bat` finds Visual Studio or the Build Tools wherever they are installed.
+- `loader/third_party/bcdec.h` (MIT or public domain) decodes the colour masks.
 
 ## 1.6.1 (2026-09-27)
 

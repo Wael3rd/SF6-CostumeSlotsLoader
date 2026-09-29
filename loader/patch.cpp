@@ -2,6 +2,8 @@
 #include <string>
 #include <cstring>
 #include <cctype>
+#define BCDEC_IMPLEMENTATION
+#include "bcdec.h"
 
 // ============================================================================
 // Helpers
@@ -584,6 +586,37 @@ std::vector<uint8_t> cmd_write(const CmdDoc& doc, const std::unordered_map<uint3
 }
 }
 
+bool cmd_tints(const std::vector<uint8_t>& data, std::vector<CmdCluster>& out) {
+    CmdDoc doc;
+    if (!cmd_parse(data, doc) || doc.objects.empty()) return false;
+    auto inst = [&](uint32_t i) -> const CmdInst* { return i < doc.inst.size() ? &doc.inst[i] : nullptr; };
+    const CmdInst* root = inst(doc.objects[0]);
+    if (!root || root->fields.empty()) return false;
+    for (uint32_t m : root->fields[0].refs) {                  // MaterialData: Type, Clusters
+        const CmdInst* md = inst(m);
+        if (!md || md->fields.size() < 2) continue;
+        for (uint32_t c : md->fields[1].refs) {                // ClusterData: Name, CustomizeColors...
+            const CmdInst* cl = inst(c);
+            if (!cl || cl->fields.size() < 2) continue;
+            CmdCluster cc;
+            const auto& raw = cl->fields[0].raw;
+            for (size_t k = 0; k + 1 < raw.size(); k += 2) {
+                const uint16_t ch = uint16_t(raw[k] | (raw[k + 1] << 8));
+                if (!ch) break;
+                cc.name += char(ch);
+            }
+            for (uint32_t e : cl->fields[1].refs) {            // CustomizeColorData: Enable, Color, Option
+                const CmdInst* cd = inst(e);
+                if (!cd || cd->fields.size() < 2 || cd->fields[0].raw.empty() || cd->fields[1].raw.size() < 4) continue;
+                uint32_t rgba; memcpy(&rgba, cd->fields[1].raw.data(), 4);
+                cc.colors.push_back({cd->fields[0].raw[0] != 0, rgba});
+            }
+            out.push_back(std::move(cc));
+        }
+    }
+    return true;
+}
+
 bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<uint8_t>& out) {
     CmdDoc doc;
     if (!cmd_parse(data, doc)) return false;
@@ -700,5 +733,78 @@ int texture_mip_check(std::vector<uint8_t>& b, bool repair, int* repaired) {
             }
             bad++;
         }
-    return bad;
+    if (!bad || !repair || images != 1) return bad;
+    // Some tools compute the levels whose side is not a multiple of 4 with fractional blocks but
+    // write whole blocks (Feixue for Mai, 6144x6144 BC7: the 6x6 level declared 24 x 1.5 = 36 bytes,
+    // 64 written): the declared table then stops short of the end of the file, while the table
+    // computed from the format fills it exactly. Only then is the whole table rewritten.
+    uint64_t off = rd<uint64_t>(b, 40);
+    for (int i = 0; i < n; i++) {
+        const uint32_t mw = std::max(1, w >> i), mh = std::max(1, h >> i);
+        const uint64_t row = block ? ((mw + 3) / 4) * unit : uint64_t(mw) * unit;
+        off += row * (block ? (mh + 3) / 4 : mh);
+    }
+    if (off != b.size()) return bad;
+    off = rd<uint64_t>(b, 40);
+    for (int i = 0; i < n; i++) {
+        const size_t at = 40 + 16ull * i;
+        const uint32_t mw = std::max(1, w >> i), mh = std::max(1, h >> i);
+        const uint32_t row = block ? ((mw + 3) / 4) * unit : mw * unit;
+        const uint32_t size = row * (block ? (mh + 3) / 4 : mh);
+        wr<uint64_t>(b, at, off);
+        wr<int32_t>(b, at + 8, int32_t(row));
+        wr<int32_t>(b, at + 12, int32_t(size));
+        off += size;
+    }
+    if (repaired) (*repaired) += bad;
+    return 0;
+}
+
+bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
+    if (b.size() < 40 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
+    const uint16_t w = rd<uint16_t>(b, 8), h = rd<uint16_t>(b, 10);
+    const int n = b[15] / 16, fmt = rd<int32_t>(b, 16);
+    int bs = 0;
+    switch (fmt) {
+        case 71: case 72: case 80: bs = 8; break;               // BC1, BC4
+        case 77: case 78: case 83: case 98: case 99: bs = 16; break;   // BC3, BC5, BC7
+        default: return false;
+    }
+    for (int i = 0; i < n; i++) {
+        const uint32_t mw = std::max(1, w >> i), mh = std::max(1, h >> i);
+        if (mw > 64 || mh > 64) continue;
+        // the first level that small only
+        if (40 + 16ull * (i + 1) > b.size() || mw < 4 || mh < 4) return false;
+        const uint64_t off = rd<uint64_t>(b, 40 + 16ull * i);
+        const uint32_t bw = (mw + 3) / 4, bh = (mh + 3) / 4;
+        if (off + uint64_t(bw) * bh * bs > b.size()) return false;
+        double sum[4] = {0, 0, 0, 0};
+        uint8_t px[4 * 4 * 4];
+        for (uint32_t by = 0; by < bh; by++)
+            for (uint32_t bx = 0; bx < bw; bx++) {
+                const uint8_t* blk = b.data() + off + (uint64_t(by) * bw + bx) * bs;
+                memset(px, 0, sizeof px);
+                switch (fmt) {
+                    case 71: case 72: bcdec_bc1(blk, px, 16); break;
+                    case 77: case 78: bcdec_bc3(blk, px, 16); break;
+                    case 98: case 99: bcdec_bc7(blk, px, 16); break;
+                    case 80: {   // one channel: red
+                        uint8_t r[16]; bcdec_bc4(blk, r, 4);
+                        for (int k = 0; k < 16; k++) px[4 * k] = r[k];
+                        break;
+                    }
+                    case 83: {   // two channels: red, green
+                        uint8_t rg[32]; bcdec_bc5(blk, rg, 8);
+                        for (int k = 0; k < 16; k++) { px[4 * k] = rg[2 * k]; px[4 * k + 1] = rg[2 * k + 1]; }
+                        break;
+                    }
+                }
+                for (uint32_t y = 0; y < 4 && by * 4 + y < mh; y++)
+                    for (uint32_t x = 0; x < 4 && bx * 4 + x < mw; x++)
+                        for (int c = 0; c < 4; c++) sum[c] += px[(y * 4 + x) * 4 + c];
+            }
+        for (int c = 0; c < 4; c++) out[c] = float(sum[c] / (255.0 * mw * mh));
+        return true;
+    }
+    return false;
 }

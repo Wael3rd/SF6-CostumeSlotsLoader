@@ -13,6 +13,11 @@ compressed, so the loader needs a decompressor to read them.
 [miniz](https://github.com/richgel999/miniz) by Rich Geldreich and contributors, MIT licence. Provides the
 deflate and zip handling used when a costume mod is delivered as an archive.
 
+## bcdec — `loader/third_party/bcdec.h`
+
+[bcdec](https://github.com/iOrange/bcdec) by Sergii Kudlai, dual licensed MIT or public domain (Unlicense).
+Decodes the block-compressed colour masks of costume materials, used to compute the colour swatches.
+
 ## LZMA SDK — `loader/third_party/lzma/`
 
 The 7z decoder of the [LZMA SDK](https://www.7-zip.org/sdk.html) 23.01 by Igor Pavlov, **public domain**.

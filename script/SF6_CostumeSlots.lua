@@ -24,6 +24,7 @@ local SLOTS = {}       -- SLOTS[fighter][costume_no] = "product/content/esf/figh
 local POSSESSION = {}  -- flat list (toutes les entrees possession du registre, tous persos)
 local FIGHTERS = {}    -- liste ordonnee des fighter ids qui ont des slots
 local FIGHTER_SET = {} -- lookup rapide : FIGHTER_SET[fighter] = true
+local SWATCHES = {}    -- SWATCHES[fighter][costume_no][colorIndex 0-9] = { rgba0, rgba1 } (pastilles calculees par le loader)
 if REGISTRY and REGISTRY.possession then
     for _, e in ipairs(REGISTRY.possession) do
         if e.fighter and e.costume_no then
@@ -31,6 +32,17 @@ if REGISTRY and REGISTRY.possession then
                 SLOTS[e.fighter] = {}
                 FIGHTERS[#FIGHTERS + 1] = e.fighter
                 FIGHTER_SET[e.fighter] = true
+            end
+            if type(e.swatches) == "table" then
+                local t = {}
+                for i = 1, 10 do
+                    local p = e.swatches[i]
+                    if type(p) == "table" and tonumber(p[1]) and tonumber(p[2]) then
+                        t[i - 1] = { math.tointeger(tonumber(p[1])) or 0, math.tointeger(tonumber(p[2])) or 0 }
+                    end
+                end
+                SWATCHES[e.fighter] = SWATCHES[e.fighter] or {}
+                SWATCHES[e.fighter][e.costume_no] = t
             end
             SLOTS[e.fighter][e.costume_no] = string.format("product/content/esf/fighter%03d/esf%03dv%02d", e.fighter, e.fighter, e.costume_no)
             POSSESSION[#POSSESSION + 1] = e
@@ -579,13 +591,57 @@ end
 -- Sans entree SelectFighterUIData pour le slot, hGUI.GetFighterCostumeColorData rend nil et
 -- Param.GetEnableColorList plante -> spin bloque. Clone de l'entree du costume de base (Outfit 1).
 local ui_done = false
+local color_td = nil
+-- Ecrit une couleur (via.Color, R dans l'octet bas) dans un champ ; relit, et ecrit en memoire si besoin
+local function write_color(obj, field, rgba)
+    color_td = color_td or sdk.find_type_definition("via.Color")
+    local vc = ValueType.new(color_td)
+    vc:set_field("rgba", rgba)
+    obj:set_field(field, vc)
+    local back = obj:get_field(field)
+    if back and back:get_field("rgba") == rgba then return true end
+    local f = obj:get_type_definition():get_field(field)
+    if not f then return false end
+    obj:write_dword(f:get_offset_from_base(), rgba)
+    back = obj:get_field(field)
+    return back ~= nil and back:get_field("rgba") == rgba
+end
+-- Pastilles calculees par le loader, posees sur une liste A LUI (GetRange = nouvelle liste, et chaque
+-- couleur clonee) : les pastilles de la tenue d'origine restent intactes.
+local function apply_swatches(clone, sw)
+    local cds = clone:get_field("ColorDatas")
+    if not cds then return 0 end
+    local n = cds:call("get_Count")
+    local copy = cds:call("GetRange", 0, n)
+    if not copy then return 0 end
+    copy = copy:add_ref()
+    local done = 0
+    for i = 0, n - 1 do
+        local e = copy:call("get_Item", i)
+        local idx = e and e:get_field("ColorIndex")
+        local pair = idx and sw[idx]
+        if pair then
+            local ne = e:call("MemberwiseClone")
+            if ne then
+                ne = ne:add_ref()
+                if write_color(ne, "Color00", pair[1]) and write_color(ne, "Color01", pair[2]) then
+                    copy:call("set_Item", i, ne)
+                    done = done + 1
+                end
+            end
+        end
+    end
+    clone:set_field("ColorDatas", copy)
+    return done
+end
+
 local function insert_select_ui()
     local gm = sdk.get_managed_singleton("app.GuiManager")
     local mgr = gm and gm:get_field("<SelectFighterUIData>k__BackingField")
     if not mgr then return false end
     local ml = mgr:get_field("ManagedList")
     if not ml or ml:call("get_Count") == 0 then return false end
-    local n = 0
+    local n, colored, sw_err = 0, 0, nil
     for _, fid in ipairs(FIGHTERS) do
         local lst = mgr:call("GetData_Fighter", fid)
         if lst then
@@ -598,6 +654,11 @@ local function insert_select_ui()
                         if clone then
                             clone = clone:add_ref()
                             clone:set_field("CostumeId", slot)
+                            local sw = SWATCHES[fid] and SWATCHES[fid][slot]
+                            if sw then
+                                local ok, res = pcall(apply_swatches, clone, sw)
+                                if ok then colored = colored + res else sw_err = sw_err or tostring(res) end
+                            end
                             cd:call("Add", clone)
                             n = n + 1
                         end
@@ -606,7 +667,8 @@ local function insert_select_ui()
             end
         end
     end
-    ev("SelectFighterUIData inserees=" .. n .. " (" .. #FIGHTERS .. " persos)")
+    ev("SelectFighterUIData inserees=" .. n .. " (" .. #FIGHTERS .. " persos), pastilles propres=" .. colored
+       .. (sw_err and (" ERREUR pastilles : " .. sw_err) or ""))
     return true
 end
 
