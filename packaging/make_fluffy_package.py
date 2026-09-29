@@ -102,6 +102,10 @@ README_TXT = CRLF.join([
     "once it is done. Mods made for older versions of the game are brought up to date on the way;",
     "an outfit the game could not load is left out and named in the log.",
     "",
+    "COLOUR SQUARES (experimental, since 1.7): the two squares next to each colour in the costume",
+    "menu are computed from each mod's own colours (its two largest colour zones). Capcom picks its",
+    "squares by hand, so they look like the outfit without matching Capcom's choice. This may be removed.",
+    "",
 ])
 
 def main():
