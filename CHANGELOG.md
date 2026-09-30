@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.9.0 (2026-09-30)
+
+### Added
+- **Stage slots (experimental).** Stage mods dropped as downloaded in `reframework/stage_mods/` (`.zip`,
+  `.7z`, `.rar`, a folder with a `natives` tree, a `.pak`) become variants of the stage they change. On the
+  stage select screen of Fighting Ground > Versus, UP / DOWN cycles a stage through its original look and
+  each mod; the name and a preview made from the mod's screenshot follow, the VS screen shows the choice, the
+  battle loads it, and the choice is kept per stage. A pack covering many stages gives one variant per stage
+  and option. The mod files go into a patch pak of their own, below the costume pak, and are served in place
+  of the original files only while selected, through one hook on the engine's path hashing that is installed
+  only once a variant is selected. The choice is local and applies to every load of the stage, online too;
+  online play has not been tested. Details and limits: [stages/README.md](stages/README.md).
 
 ### Repository
 - **Renamed SF6-SlotsLoader** (was SF6-CostumeSlotsLoader; the old links lead here). It now also holds the
@@ -13,7 +24,8 @@
 - **The stage slots' pak is not taken for a mod pak.** It sits right below the costume pak; adding or removing
   a stage mod rebuilt the costume pak (about 50 s with many mods). It is now recognised by its marker and left
   out, the costume pak stays above it, and when only its presence changed the costume pak is moved instead of
-  rebuilt.
+  rebuilt. The first launch after updating rebuilds the costumes once.
+- `outfits.json` (read by the audit) follows the costume pak when it changes number.
 
 ## 1.8.1 (2026-09-30)
 

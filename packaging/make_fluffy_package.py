@@ -1,17 +1,20 @@
-# The built files come from this repository (build.bat first: build/costumes_only/amd_ags_x64.dll,
+# The built files come from this repository (build.bat first: build/amd_ags_x64.dll,
 # build/SF6_CostumeSlotsNative.dll), the generated data files and the genuine AMD library from a
 # live installation (--game), since neither lives in this repository.
-"""Assemble le zip Fluffy du mod de base "SF6 Costume Slots Loader".
+"""Assemble le zip Fluffy du mod de base "SF6 Slots Loader" (costumes + stages).
 
 Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
-  amd_ags_x64.dll                       proxy AGS + loader costumes seul (build/costumes_only/amd_ags_x64.dll)
+  amd_ags_x64.dll                       proxy AGS + loaders costumes et stages (build/amd_ags_x64.dll ;
+                                        --costumes-only : build/costumes_only/amd_ags_x64.dll, sans stages)
   amd_ags_x64_real.dll                  la vraie bibliotheque AMD AGS du jeu (MIT), que le proxy relaie
-  reframework/autorun/SF6_CostumeSlots.lua
+  reframework/autorun/SF6_CostumeSlots.lua, SF6_StageSlots.lua
   reframework/plugins/SF6_CostumeSlotsNative.dll   (alias en match sur REFramework officiel)
   reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv
   reframework/data/SF6_Costumes_Data/loader/static/*      (5 fichiers structurels + static_meta.json)
+  reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt   (du depot, fins de ligne LF)
+  reframework/costume_mods/<31 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
 
-Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"]
+Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
 """
 import argparse, os, sys, zipfile, hashlib
@@ -68,24 +71,53 @@ COSTUME_MODS_TXT = CRLF.join([
     "",
 ])
 
+STAGE_MODS_TXT = CRLF.join([
+    "Drop stage mods here, exactly as downloaded from Nexus: the .zip, .7z or .rar file itself,",
+    "a folder with a natives tree, or a .pak. Restart the game. EXPERIMENTAL.",
+    "",
+    "On the stage select screen of Fighting Ground > Versus, a stage that has mods shows its name",
+    "between UP / DOWN symbols: UP / DOWN cycles it through its original look and each mod made for",
+    "it. The name and the preview image follow, the VS screen shows the choice, and the battle loads",
+    "it. The choice is kept per stage. Each option of a mod gives one variant of the stage it changes.",
+    "",
+    "The choice is local, and it applies to every load of that stage: training, arcade, replays and",
+    "online too (the other player sees their own version). Online play has not been tested. To get",
+    "the original back, select it again on the stage select screen.",
+    "",
+    "To remove a mod, delete its archive or folder: the stage pak is rebuilt at the next launch.",
+    "The first launch after adding a large archive takes a few seconds longer: it is unpacked once",
+    "into the hidden .cache folder, which can be deleted at any time.",
+    "",
+    "Stage mods installed with Fluffy Mod Manager still replace the stage (not variants yet). A mod",
+    "that hangs the game on its own hangs it here too. When reporting a problem, send",
+    "SF6_StageSlots.log from the game folder and the mod link.",
+    "",
+])
+
 README_TXT = CRLF.join([
-    "SF6 Costume Slots Loader v%s",
-    "=============================",
+    "SF6 Slots Loader v%s",
+    "====================",
     "",
     "Costume mods become EXTRA outfit slots instead of replacing an existing one, and the",
     "original outfit stays available. Nothing to do at runtime, nothing to convert.",
+    "",
+    "Since 1.9 (experimental): stage mods become variants of their stage. On the stage select",
+    "screen, UP / DOWN cycles a stage through its original look and each mod installed for it.",
+    "Without stage mods, no stage is changed and nothing is hooked.",
     "",
     "INSTALL (manual): copy the contents of this archive into the Street Fighter 6 folder,",
     "keeping the directory structure:",
     "  amd_ags_x64.dll             loader (AMD AGS proxy, loaded by the game itself)",
     "  amd_ags_x64_real.dll        the original AMD library, called by the proxy",
-    "  reframework/autorun/        Lua script (menus, colours)",
+    "  reframework/autorun/        Lua scripts (costume menus and colours, stage select)",
     "  reframework/plugins/        native plugin (online matches)",
-    "  reframework/data/           static tables + vanilla costume index",
+    "  reframework/data/           static tables, vanilla costume index, stage path index",
     "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders;",
     "                              SF6_CostumeAudit.bat there lists what is installed",
+    "  reframework/stage_mods/     drop your stage mods here, as downloaded",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
+    "Updating from an older version: disable or remove the old one in Fluffy first.",
     "",
     "REQUIREMENTS: REFramework in dinput8.dll (official 1.5.8 or newer).",
     "",
@@ -113,17 +145,21 @@ def main():
     ap.add_argument("--version", default="1.0")
     ap.add_argument("--out", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
+    ap.add_argument("--costumes-only", action="store_true", help="the costume loader alone, without stage slots")
     a = ap.parse_args()
     GAME = a.game                                # racine du jeu
     REF = os.path.join(GAME, "reframework")
-    out = a.out or os.path.join(os.path.expanduser("~"), "Documents", "SF6_CostumeSlotsLoader_v%s_FluffyMod.zip" % a.version)
+    out = a.out or os.path.join(os.path.expanduser("~"), "Documents", "SF6_SlotsLoader_v%s.zip" % a.version)
+    stages = not a.costumes_only
 
-    proxy = os.path.join(REPO, "build", "costumes_only", "amd_ags_x64.dll")
+    proxy = os.path.join(REPO, "build", "amd_ags_x64.dll") if stages else os.path.join(REPO, "build", "costumes_only", "amd_ags_x64.dll")
     real = None
     for cand in (os.path.join(GAME, "amd_ags_x64_real.dll"), os.path.join(REF, "_backup", "amd_ags_x64_real_orig_20260922.dll")):
         if os.path.exists(cand) and is_real_ags(cand): real = cand; break
     if real is None: sys.exit("vraie amd_ags_x64.dll introuvable")
-    if not os.path.exists(proxy) or is_real_ags(proxy): sys.exit("build/costumes_only/amd_ags_x64.dll manquant ou pas le proxy (build.bat ?)")
+    if not os.path.exists(proxy) or is_real_ags(proxy): sys.exit(proxy + " manquant ou pas le proxy (build.bat ?)")
+    if stages and b"stageslots-" not in open(proxy, "rb").read():
+        sys.exit(proxy + " ne contient pas les stages (build.bat ?)")
     lua = os.path.join(REPO, "costumes", "script", "SF6_CostumeSlots.lua")
     plugin = os.path.join(REPO, "build", "SF6_CostumeSlotsNative.dll")
     loader_dir = os.path.join(REF, "data", "SF6_Costumes_Data", "loader")
@@ -136,17 +172,19 @@ def main():
     ]
     for n in ("SF6_CostumeAudit.bat", "SF6_CostumeAudit.ps1"):
         files.append((os.path.join(REPO, "costumes", "audit", n), "reframework/costume_mods/" + n))
+    if stages:
+        files.append((os.path.join(REPO, "stages", "script", "SF6_StageSlots.lua"), "reframework/autorun/SF6_StageSlots.lua"))
     for n in sorted(os.listdir(os.path.join(loader_dir, "static"))):
         if n.lower().endswith((".md",)): continue
         files.append((os.path.join(loader_dir, "static", n), "reframework/data/SF6_Costumes_Data/loader/static/" + n))
     for src, _ in files:
         if not os.path.exists(src): sys.exit("manquant : " + src)
     modinfo = (
-        "name=SF6 Costume Slots Loader\n"
+        "name=SF6 Slots Loader\n"
         "version=%s\n"
-        "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, keeping the original outfit. Costume mods can also be dropped as downloaded (.zip, .7z, .rar) in reframework/costume_mods/<Character>/. Install once; then install costume mods as usual and restart the game.\n"
+        "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, keeping the original outfit. Costume mods can also be dropped as downloaded (.zip, .7z, .rar) in reframework/costume_mods/<Character>/. Experimental: stage mods dropped in reframework/stage_mods/ become variants of their stage, UP / DOWN on the stage select screen. Install once; then install mods as usual and restart the game.\n"
         "author=Wael\n"
-        "NameAsBundle=SF6 Costume Slots Loader\n" % a.version)
+        "NameAsBundle=SF6 Slots Loader\n" % a.version)
     readme = README_TXT % a.version
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)
@@ -154,6 +192,13 @@ def main():
         for src, dst in files:
             z.write(src, dst)
             print("  %-70s %10d  %s" % (dst, os.path.getsize(src), sha(src)))
+        if stages:
+            # the stage path index as the repository stores it (LF), whatever the checkout did to it
+            idx = open(os.path.join(REPO, "stages", "data", "loader", "stage_paths.txt"), "rb").read().replace(b"\r\n", b"\n")
+            z.writestr("reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt", idx)
+            print("  %-70s %10d  %s" % ("reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt", len(idx), hashlib.sha256(idx).hexdigest()[:16]))
+            z.writestr("reframework/stage_mods/README.txt", STAGE_MODS_TXT)
+            print("  %-70s %10s  %s" % ("reframework/stage_mods/", "-", "structure"))
         # structure vide livree telle quelle : un dossier par personnage + son mode d'emploi
         z.writestr("reframework/costume_mods/LISEZMOI.txt", COSTUME_MODS_TXT)
         for name in CHARACTERS:

@@ -32,6 +32,19 @@ folder; the loader rewrites it at every launch where something changed.
 - 1.8.1, all of it: C. Viper Bayonetta (wings included), Ken SFV with Ken SFV Hair in one sub-folder (only the
   combined outfit), several mods of the same outfit installed together (colours no longer mixed).
 
+## New in 1.9.0, to check in game
+
+- **First launch after updating**: the costumes are rebuilt once (the stage pak no longer counts in their
+  fingerprint), then `Up to date` again. Adding or removing a stage mod afterwards must not rebuild the
+  costumes (`SF6_CostumeLoader.log`: `stage slots pak, not a costume mod`, then `Up to date`).
+- **Stage slots online**: select a variant, then play a casual or ranked match on that stage. Only you see it;
+  check that nothing else happens.
+- **UP / DOWN hints with a pad** (only a keyboard was tried).
+- **Other stage select screens** (rooms, Battle Hub, matchmaking settings).
+- **Stage Lighting Overhaul** options other than Training Room Red and Yellow, and **Genbu Temple Night Time**,
+  in battle.
+- **Without stage mods**: `SF6_StageSlots.log` shows no `hook installed`.
+
 ## New in 1.7, to check in game
 
 - **Colour swatches** (experimental): in the costume menu, the two squares of each colour of a modded

@@ -6,7 +6,7 @@ in one `amd_ags_x64.dll`:
 | Part | What it does | State |
 |---|---|---|
 | **Costume slots** (`costumes/`) | every costume mod becomes an extra outfit slot | released, this page |
-| **Stage slots** (`stages/`) | UP / DOWN on the stage select screen cycles a stage through its mods | in development, not in the releases yet: [stages/README.md](stages/README.md) |
+| **Stage slots** (`stages/`) | UP / DOWN on the stage select screen cycles a stage through its mods | experimental, in the releases since 1.9.0: [stages/README.md](stages/README.md) |
 
 This repository was named SF6-CostumeSlotsLoader until 30/09/2026; the old links lead here.
 
@@ -28,6 +28,14 @@ REFramework in `dinput8.dll`, official build 1.5.8 or newer.
 Costume mods can also go straight into `reframework\costume_mods\<Character>\`, **as downloaded**: the
 `.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
 unpack, nothing to convert.
+
+**Stage mods** (experimental, since 1.9.0) go into `reframework\stage_mods\`, as downloaded too. On the stage
+select screen of Fighting Ground > Versus, UP / DOWN cycles a stage through its original look and each mod
+made for it. Without stage mods, no stage is changed and nothing is hooked. See
+[stages/README.md](stages/README.md).
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Since 1.9.0 the mod is named
+SF6 Slots Loader.
 
 ## Checking what is installed
 
@@ -118,16 +126,16 @@ packaging/           builds the distributable zip
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash
 the mod fingerprint), and `advapi32` and `user32` for the archive decoders; the game has all four loaded
 already. Every AGS export is forwarded to `amd_ags_x64_real.dll`, the genuine AMD library that ships with the
-game. The stage slots add one hook, described in [stages/README.md](stages/README.md); the releases ship the
-costume loader alone until they are ready.
+game. The stage slots add one hook, described in [stages/README.md](stages/README.md), installed only once a
+stage variant is selected.
 
 ## Building
 
 Visual Studio 2022 or Build Tools with the C++ workload, then `build.bat` at the root:
 
 ```
-build\amd_ags_x64.dll                  costume slots + stage slots
-build\costumes_only\amd_ags_x64.dll    costume slots alone (the releases)
+build\amd_ags_x64.dll                  costume slots + stage slots (the releases)
+build\costumes_only\amd_ags_x64.dll    costume slots alone, no stage slots
 build\SF6_CostumeSlotsNative.dll       REFramework plugin
 build\costume_loader.exe, paktool.exe, loadtest.exe, stagepak.exe, stagetest.exe, textest.exe
 ```
