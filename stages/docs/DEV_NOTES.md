@@ -85,4 +85,13 @@ Space; R/F taps are sometimes ignored there) -> main menu, F on Fighting Ground 
 Next F -> sides F -> stage select (Q/D move, Z/S = UP/DOWN). From a battle: Esc -> Return to Stage Select,
 or the result menu's Change Stage.
 
-Deployed backup of the costume-only DLL: `amd_ags_x64.dll.bak_20260930_prestage` in the game folder.
+## Deploying
+
+- Game folder `amd_ags_x64.dll` = root `build.bat` output `build\amd_ags_x64.dll` (costume + stage slots).
+  Copy it with the game closed. `build\costumes_only\` is the release build without stage slots (no hook).
+- Also deployed: `stages/script/SF6_StageSlots.lua` to `reframework/autorun/`,
+  `stages/data/loader/stage_paths.txt` to `reframework/data/SF6_StageSlots_Data/loader/`. A git checkout
+  may turn `stage_paths.txt` to CRLF: the loader reads both, but its size is part of the stage fingerprint,
+  so copying a checkout with other line endings rebuilds the stage pak once (a few seconds).
+- Backups in the game folder: `amd_ags_x64.dll.bak_20260930_prestage` (costume slots only, before stage
+  slots), `amd_ags_x64.dll.bak_20260930_premerge` (last build of the standalone stage repo).
