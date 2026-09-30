@@ -46,10 +46,18 @@ The loader therefore does two things at every launch where something changed:
 | Options of one mod replacing the same files | Two options on the same slot | Each option gets its own identity; outfits made of exactly the same files are installed once |
 | A character with more than 100 outfits | Outfits past the 100th silently missing | Named in the log |
 | Mod that only changes a part of an original outfit (glasses, earrings) | Ignored | The original outfit with the change, in a slot of its own; the original stays as it is |
+| Textures of a part shipped without its material, or used by the material of another part (a retextured head, a hood that is part of the hair and uses the body's cloth, eyes in the shared `000/` folder) | That part keeps the original look | The slot gets its own copy of every original material that uses a texture of the mod, bound to it (since 1.9.0) |
+| Wind settings of the mod (`weather/wind/.../*_chain_BattleSetting.chain`) | Cloth and hair move with the original outfit's wind | The slot's scene follows every file the slot has under its own name (since 1.9.0) |
+| Newer colour files in the DLC paks (Outfit 1 of JP, Dhalsim, Lily, Guile) | Slot built from the older colours | The game's paks are read in the game's order (since 1.9.0) |
 
 Every check is measured against the game's own files: the mesh and material rule holds for all 362
 original costume parts, the texture rule for all 7,084 original costume textures, and the colour-file
 reader rewrites all 1,530 original colour files byte for byte.
+
+**Owning the original outfit is not needed**, for the outfit a mod replaces or for parts it takes from other
+outfits: the files of every outfit are in the game's base pak, which every player has (the DLC paks, installed
+for their owners, only hold newer colour files of a few Outfit 1s). When a part of a mod is missing in its
+slot, `SF6_CostumeLoader.log` says which file on a `WARN: the slot loads ... from the game` line.
 
 ## Mods tested
 
@@ -70,14 +78,14 @@ Tested on 2026-09-27 and 2026-09-30 with official REFramework 1.5.8 and the game
 | Lily | [Nico bundle](https://www.nexusmods.com/streetfighter6/mods/78) | Works | Outfits with hair and weapon add-ons, weapons follow the slot |
 | Zangief | [Specter Zangief](https://www.nexusmods.com/streetfighter6/mods/3816) | Works | |
 | Dhalsim | [Mummy Dhalsim](https://www.nexusmods.com/streetfighter6/mods/3645) | Works | Its head lives in its own folder, named by its scene: showed the original head before 1.7 |
-| Juri | [Oni Juri](https://www.nexusmods.com/streetfighter6/mods/3900) | Works | |
+| Juri | [Oni Juri](https://www.nexusmods.com/streetfighter6/mods/3900) | Works | 1.9.0: its eyes (shared `000/` folder) shown, the original ones before |
 | Juri | [Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3781) | Works | Together with Oni Juri, in either order |
 | A.K.I. | [TFD Racer](https://www.nexusmods.com/streetfighter6/mods/3084) | Works | Same colour-file problem as Christie, fixed the same way |
 | Akuma | [Specter Akuma](https://www.nexusmods.com/streetfighter6/mods/3805) | Works | |
 | C. Viper | [Coat no mesh, Outfit 1](https://www.nexusmods.com/streetfighter6/mods/2966) | Works | Keeps the coat, removes the mesh fabric. Colours intact with the C3 body mod installed (reported lost with Fluffy alone) |
 | C. Viper | An Outfit 3 body mod shared on Discord | Works | |
-| C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin |
-| C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin |
+| C. Viper | [Swimsuit C. Viper](https://www.nexusmods.com/streetfighter6/mods/3909) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, gloves or not), default skin. 1.9.0: its wind settings used |
+| C. Viper | [C.Viper Lace Lingerie](https://www.nexusmods.com/streetfighter6/mods/3015) | Works | Modular: 8 outfits (regular or thicc, barefoot or heels, jacket or not), default skin. 1.9.0: its retextured head shown |
 | C. Viper | [C. Viper - Coatless C1](https://www.nexusmods.com/streetfighter6/mods/2967) | Works |  |
 | C. Viper | [C. Viper C2 - Glasses Removed](https://www.nexusmods.com/streetfighter6/mods/2972) | Works | Changes the head only: gives Outfit 2 without glasses in a slot of its own (since 1.6.0) |
 | Cammy | [Imperium Cammy](https://www.nexusmods.com/streetfighter6/mods/3046) | Works |  |
@@ -104,8 +112,8 @@ Tested on 2026-09-27 and 2026-09-30 with official REFramework 1.5.8 and the game
 | C. Viper | [C. Viper Trench Coat](https://www.nexusmods.com/streetfighter6/mods/3107) | Works | Froze the select screen before 1.8.1 (backslash references) |
 | C. Viper | [C Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) | Works | |
 | C. Viper | [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) | Works |  |
-| C. Viper | [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) | Works |  |
-| Lily | [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) | Works |  |
+| C. Viper | [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) | Works | 1.9.0: its wind settings used |
+| Lily | [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) | Works | 1.9.0: the hood (part of the hair, the body's cloth) shows the mod's cloth |
 | Dhalsim | [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) | Works |  |
 
 ## Stage mods tested (experimental, since 1.9.0)

@@ -191,11 +191,22 @@ void PakReader::close() {
 }
 
 const PakEntry* PakReader::find(uint64_t hash) const {
+    for (auto* o : over_)
+        if (auto* e = o->find(hash)) return e;
     auto it = entries_.find(hash);
     return (it != entries_.end()) ? &it->second : nullptr;
 }
 
+PakReader* PakReader::owner_of(const PakEntry& e) {
+    for (auto* o : over_) {
+        auto it = o->entries_.find(e.combined_hash());
+        if (it != o->entries_.end() && &it->second == &e) return o;
+    }
+    return nullptr;
+}
+
 std::vector<uint8_t> PakReader::read_raw(const PakEntry& e) {
+    if (auto* o = owner_of(e)) return o->read_raw(e);
     if (!fp_) return {};
     std::vector<uint8_t> buf(size_t(e.compressed_size));
     _fseeki64(fp_, e.offset, SEEK_SET);

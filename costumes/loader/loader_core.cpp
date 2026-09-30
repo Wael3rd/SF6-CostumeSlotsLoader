@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-30-partspreload";
+static const char* LOADER_BUILD_ID = "2026-09-30-dlcpaks";
 
 // ============================================================================
 // Utility
@@ -2146,6 +2146,40 @@ static void add_slot_files(PakWriter& writer,
         printf("      relocated shared files from 000/ parts\n");
     }
 
+    // ---- Phase 1d: the game's materials that name the mod's textures ----
+    // A material of the outfit the mod does not ship can still use textures the mod ships: C. Viper
+    // Lace lingerie C2 retextures the head without its mesh or material, Haruka Hoodie retextures
+    // Lily's body cloth that her hair material also uses, OniJuri the eyes of the shared 000/ folder.
+    // Left in place, such a material keeps the game's textures (the mod's moved into the slot, the
+    // originals stay the game's). It gets a copy in the slot folder bound to the mod's textures, and
+    // the scene points at it below. Every material the slot loads is then its own or the game's.
+    bool shared_material_given = false;   // the scene's 000/ pass below must run
+    if (!mod_tex_keys.empty() || !shared_tex_keys.empty()) {
+        auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
+        const PakEntry* se0 = (oc && !oc->scene.empty()) ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+        if (se0) {
+            auto sd = base_pak.read(*se0);
+            for (auto& r : scene_model_refs(std::vector<uint8_t>(sd.begin(), sd.end()))) {
+                if (!str_ends_with(str_lower(r.text), ".mdf2")) continue;
+                std::string vp = scene_ref_pak_path(r.text, inv.suffixes), sfd, folder;
+                if (vp.empty() || !parse_model_folder(vp, sfd, folder) || sfd != fd) continue;
+                if (folder != old_f && folder != "000") continue;
+                std::string new_path = relocate_path(vp, fd, folder, new_f);
+                if (new_path == vp || written_paths.count(new_path)) continue;
+                auto* ve = base_pak.find(pak_path_hash(std::string_view(vp)));
+                if (!ve) continue;
+                auto md = base_pak.read(*ve);
+                if (patch_material(md) == 0) continue;
+                writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(md));
+                written_paths.insert(new_path);
+                if (folder == old_f) relocated_vanilla_mdf2.push_back(vp);
+                else shared_material_given = true;
+                printf("      material %s names textures of the mod: the slot gets its own copy\n", vp.c_str());
+                count++; patched++;
+            }
+        }
+    }
+
     // ---- Phase 3: External files matching this costume's prefix ----
     {
         std::string ext_prefix = fd + "_" + old_f + "_";
@@ -2265,11 +2299,13 @@ static void add_slot_files(PakWriter& writer,
             patch_scene_minimal(vdata, fd, old_f, new_f,
                                 &written_paths, &inv.suffixes);
             // Second pass: patch 000/ references for parts we relocated
-            if (!shared_parts.empty())
+            if (!shared_parts.empty() || shared_material_given)
                 patch_scene_minimal(vdata, fd, "000", new_f,
                                     &written_paths, &inv.suffixes);
-            // Third pass: weather/havok chain filename-prefix rename
-            if (!mod_chain_parts.empty()) {
+            // Third pass: weather/havok chain filename-prefix rename. Also, whatever its kind, a
+            // reference to a file the slot has under the renamed stem (phase 3: C. Viper Concept
+            // Outfit's weather/wind/.../esf030_001_01_chain_BattleSetting.chain) follows it.
+            {
                 std::string old_wpfx = fd + "_" + old_f + "_";
                 std::string new_wpfx = fd + "_" + new_f + "_";
                 std::vector<uint8_t> ow16, nw16;
@@ -2300,7 +2336,17 @@ static void add_slot_files(PakWriter& writer,
                         for (size_t wj = s0; wj < wi; wj += 2) full += (char)tolower(vdata[wj]);
                         in_weather = full.find("weather/") != std::string::npos;
                     }
-                    if (ws.find("chain.chain") != std::string::npos || in_weather) {
+                    bool slot_has = false;
+                    {
+                        size_t s0 = wi;
+                        while (s0 >= 2 && !(vdata[s0 - 2] == 0 && vdata[s0 - 1] == 0)) s0 -= 2;
+                        std::string head;
+                        for (size_t wj = s0; wj < wi; wj += 2) head += (char)tolower(vdata[wj]);
+                        while (!head.empty() && (head[0] == '@' || head[0] == ' ')) head.erase(0, 1);
+                        std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
+                        slot_has = !target.empty() && written_paths.count(target);
+                    }
+                    if (slot_has || (!mod_chain_parts.empty() && (ws.find("chain.chain") != std::string::npos || in_weather))) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
                         patched++;
                     }
@@ -2785,6 +2831,55 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
         if (!fixed) return "part " + part + ": " + why;
     }
     return {};
+}
+
+// Files of the slot's own mod that the slot does not show: it loads them outside its folder, where the
+// original outfit's file is (the loader keeps that outfit as the game made it). Found this way on
+// 30/09: a retextured head without its material (C. Viper Lace lingerie C2), a hair material using
+// the body's retextured cloth (Haruka Hoodie), shared eyes (OniJuri), a wind chain (C. Viper
+// Concept Outfit). Reported only; the log says what a player's mod lacks.
+static int report_outside(Ctx& c, const SlotInfo& slot) {
+    auto* mc = slot.mod_costume;
+    if (!mc) return 0;
+    const std::string& fd = slot.fighter_dir;
+    const std::string slot_dir = "/" + fd + "/" + slot.new_folder + "/", slot_stem = fd + "_" + slot.new_folder + "_",
+                      slot_ud = "/battle" + slot.new_folder + "/";
+    auto is_slot = [&](const std::string& p) {
+        return p.find(slot_dir) != std::string::npos || p.find(slot_stem) != std::string::npos
+            || p.find(slot_ud) != std::string::npos;
+    };
+    const std::string scene_p = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+    std::vector<std::string> todo{scene_p};
+    std::set<std::string> seen{scene_p};
+    for (size_t i = 0; i < todo.size() && i < 4000; i++) {
+        const std::string& p = todo[i];
+        // A user file outside the slot is the first reference of a pair the scene keeps on the original
+        // (its userdata table, preloaded; the component uses the slot's copy): not followed
+        const bool follow = i == 0 || str_ends_with(p, ".mdf2.31") || (is_slot(p) && p.find(".user.") != std::string::npos);
+        if (!follow) continue;
+        for (auto& s : utf16_strings(c.gf.load(p))) {
+            std::string r = resource_path(s, *c.suffixes);
+            if (!r.empty() && seen.insert(r).second) todo.push_back(r);
+        }
+    }
+    const std::string old_dir = "/" + fd + "/" + slot.original_folder + "/";
+    int n = 0;
+    for (auto& p : seen) {
+        if (is_slot(p)) continue;
+        // the scene's first reference of a user file stays on the original, the second is the slot's copy
+        if (p.find(".user.") != std::string::npos && p.find(old_dir) != std::string::npos) {
+            std::string twin = p;
+            twin.replace(twin.find(old_dir), old_dir.size(), slot_dir);
+            if (seen.count(twin)) continue;
+        }
+        const ModFileRef* own = nullptr;
+        for (auto* files : {&mc->files_in_folder, &mc->files_shared, &mc->files_other, &mc->files_donor, &mc->files_scene})
+            if (auto f = files->find(p); f != files->end()) { own = &f->second; break; }
+        if (!own || c.gf.load(p) == own->read_data()) continue;
+        if (n++ < 8) printf("      WARN: the slot loads %s from the game, not the mod's version of it\n", p.c_str());
+    }
+    if (n) printf("      WARN: %d files of the mod not used by the slot\n", n);
+    return n;
 }
 
 }  // namespace slotcheck
@@ -3956,6 +4051,45 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
     return fp;
 }
 
+// The DLC paks (dlc\*.pak), which Steam installs only for their owners. The game reads them over
+// re_chunk_000.pak: they hold newer versions of a few outfit files (the colours of JP, Dhalsim,
+// Lily and Guile's Outfit 1), so the slots are built from what the game reads.
+static std::vector<std::string> dlc_pak_paths(const std::string& game_dir) {
+    std::vector<std::string> out;
+    WIN32_FIND_DATAA fd;
+    std::string dir = game_dir + "\\dlc\\";
+    HANDLE fh = FindFirstFileA((dir + "*.pak").c_str(), &fd);
+    if (fh == INVALID_HANDLE_VALUE) return out;
+    do out.push_back(dir + fd.cFileName); while (FindNextFileA(fh, &fd));
+    FindClose(fh);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+static void open_dlc_paks(const std::string& game_dir, PakReader& base_pak,
+                          std::vector<std::unique_ptr<PakReader>>& keep) {
+    for (auto& p : dlc_pak_paths(game_dir)) {
+        auto r = std::make_unique<PakReader>();
+        if (!r->open(p.c_str())) continue;
+        base_pak.add_overlay(r.get());
+        keep.push_back(std::move(r));
+    }
+}
+
+// Buying or removing a DLC changes what the game reads: part of the fingerprint
+static std::string dlc_fingerprint(const std::string& game_dir) {
+    std::string fp;
+    for (auto& p : dlc_pak_paths(game_dir)) {
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        if (!GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &fa)) continue;
+        char buf[400];
+        snprintf(buf, sizeof buf, ";dlc/%s:%llu", p.substr(p.rfind('\\') + 1).c_str(),
+                 (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow));
+        fp += buf;
+    }
+    return fp;
+}
+
 // ============================================================================
 // costume_loader_run  (entry point for exe and DLL)
 // ============================================================================
@@ -4010,21 +4144,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             slotcheck::GameFiles gf;
             gf.writer = &empty;
             std::vector<std::unique_ptr<PakReader>> extra;
-            for (const std::string& pattern : {game_dir + "\\dlc\\*.pak", game_dir + "\\re_dlc_*.pak"}) {
-                WIN32_FIND_DATAA fdta;
-                HANDLE fh = FindFirstFileA(pattern.c_str(), &fdta);
-                if (fh == INVALID_HANDLE_VALUE) continue;
-                std::string dir = pattern.substr(0, pattern.rfind('\\') + 1);
-                do {
-                    auto r = std::make_unique<PakReader>();
-                    if (r->open((dir + fdta.cFileName).c_str())) extra.push_back(std::move(r));
-                } while (FindNextFileA(fh, &fdta));
-                FindClose(fh);
-            }
             PakReader base_pak;
             if (!base_pak.open(base_path.c_str())) { log_close(); return 1; }
+            open_dlc_paks(game_dir, base_pak, extra);
             gf.paks.push_back(&base_pak);
-            for (auto& r : extra) gf.paks.push_back(r.get());
             FILE* tf = fopen(test_out, "wb");
             if (tf) {
                 for (auto& ci : inv.costumes) {
@@ -4117,7 +4240,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // 3d. Fingerprint check for early exit
-    std::string new_fp = compute_fingerprint(mod_paks, folder_infos);
+    std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir);
     int max_mod_num = stage_pak_num;
     for (auto& pi : mod_paks) max_mod_num = std::max(max_mod_num, pi.num);
     int target_num = max_mod_num + 1;
@@ -4158,6 +4281,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         log_close(); return 1;
     }
     logf("  %zu entries\n", base_pak.entry_count());
+    std::vector<std::unique_ptr<PakReader>> dlc_readers;
+    open_dlc_paks(game_dir, base_pak, dlc_readers);
+    if (!dlc_readers.empty()) logf("  + %zu DLC paks read over it\n", dlc_readers.size());
     load_current_crcs(base_pak);
 
 
@@ -4303,26 +4429,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // Slot check: every slot must be loadable as the game will load it, else it is left out
     {
-        std::vector<std::unique_ptr<PakReader>> dlc_readers;
-        {
-            WIN32_FIND_DATAA fdta;
-            std::string dlc_dir = game_dir + "\\dlc\\";
-            HANDLE fh = FindFirstFileA((dlc_dir + "*.pak").c_str(), &fdta);
-            if (fh != INVALID_HANDLE_VALUE) {
-                do {
-                    auto r = std::make_unique<PakReader>();
-                    if (r->open((dlc_dir + fdta.cFileName).c_str())) dlc_readers.push_back(std::move(r));
-                } while (FindNextFileA(fh, &fdta));
-                FindClose(fh);
-            }
-        }
         slotcheck::Ctx ctx;
         ctx.gf.writer = &writer;
         std::sort(game_patch_readers.begin(), game_patch_readers.end(),
                   [](auto& a, auto& b) { return a.first > b.first; });
         for (auto& [num, r] : game_patch_readers) ctx.gf.paks.push_back(r);
-        for (auto& r : dlc_readers) ctx.gf.paks.push_back(r.get());
-        ctx.gf.paks.push_back(&base_pak);
+        ctx.gf.paks.push_back(&base_pak);   // with the DLC paks over it
         ctx.suffixes = &inv.suffixes;
         ctx.all_mod = &all_mod_files;
         printf("\nChecking slots...\n");
@@ -4331,7 +4443,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         g_left_out.clear();
         for (auto& sl : slots) {
             std::string why = slotcheck::check_slot(ctx, sl);
-            if (why.empty()) { kept.push_back(sl); continue; }
+            if (why.empty()) {
+                if (slotcheck::report_outside(ctx, sl))
+                    printf("      ^ slot %s/v%02d (%s, from %s)\n", sl.fighter_dir.c_str(), sl.new_costume_no,
+                           sl.outfit_name.c_str(), mod_label(sl.mod_id).c_str());
+                kept.push_back(sl); continue;
+            }
             left_out++;
             g_left_out.push_back({sl.fighter, mod_label(sl.mod_id), why});
             printf("  WARN: slot %s/v%02d (%s, from %s) left out, the game could not load it: %s\n",

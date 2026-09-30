@@ -63,6 +63,11 @@ public:
 
     const PakEntry* find(uint64_t hash) const;
 
+    // A pak the game reads over this one (the DLC paks over re_chunk_000.pak): find() looks in
+    // the overlays first, in the order they were added, and read() reads an entry from the pak it
+    // came from. The overlay must outlive this reader.
+    void add_overlay(PakReader* over) { over_.push_back(over); }
+
     // Returns the raw (possibly compressed) blob.
     std::vector<uint8_t> read_raw(const PakEntry& e);
 
@@ -75,6 +80,9 @@ public:
 private:
     FILE*    fp_ = nullptr;
     EntryMap entries_;
+    std::vector<PakReader*> over_;
+
+    PakReader* owner_of(const PakEntry& e);
 };
 
 // ============================================================================
