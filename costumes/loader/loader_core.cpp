@@ -75,7 +75,7 @@ static std::string w2a(const wchar_t* w) {
 // Constants
 // ============================================================================
 
-static const char* MARKER_PATH  = "natives/stm/sf6_costume_slots.marker";
+static const char* MARKER_PATH  = COSTUME_SLOTS_MARKER;
 static const char* BASE_PFX     = "natives/stm/product/";
 static const char* STREAM_PFX   = "natives/stm/streaming/product/";
 static const char* ESF_ROOT     = "natives/stm/product/charparam/esf/esf.scn.20";
@@ -844,10 +844,16 @@ static bool delete_with_retry(const std::string& path) {
     return false;
 }
 
+// The stage slots' pak (stages/) is neither a mod nor ours: it holds stage files under names of
+// their own, so it is left out of the scan and of the fingerprint (adding a stage mod does not
+// rebuild the costumes); only its number is kept, since ours goes above it.
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
-                                std::vector<PakInfo>& mod_paks) {
+                                std::vector<PakInfo>& mod_paks,
+                                int& stage_pak_num) {
     uint64_t marker_h = pak_path_hash(std::string_view(MARKER_PATH));
+    uint64_t stage_h = pak_path_hash(std::string_view(STAGE_SLOTS_MARKER));
+    stage_pak_num = 0;
     WIN32_FIND_DATAA fd;
     std::string pattern = pak_dir + "\\re_chunk_000.pak.patch_*.pak";
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
@@ -864,14 +870,17 @@ static void classify_patch_paks(const std::string& pak_dir,
         if (!fp) continue;
         struct { uint32_t magic; uint8_t maj,min; int16_t feat; uint32_t count,fp_; } hdr;
         fread(&hdr, 1, 16, fp);
-        bool has_marker = false;
+        bool has_marker = false, is_stage = false;
         for (uint32_t i = 0; i < hdr.count; i++) {
             uint32_t lo, hi; int64_t dummy[5];
             fread(&lo, 4, 1, fp); fread(&hi, 4, 1, fp);
             fread(dummy, 8, 5, fp);
-            if (((uint64_t(hi)<<32)|lo) == marker_h) { has_marker = true; break; }
+            uint64_t h = (uint64_t(hi)<<32)|lo;
+            if (h == marker_h) { has_marker = true; break; }
+            if (h == stage_h) { is_stage = true; break; }
         }
         fclose(fp);
+        if (is_stage) { stage_pak_num = std::max(stage_pak_num, num); continue; }
         (has_marker ? our_paks : mod_paks).push_back({num, full});
     } while (FindNextFileA(h, &fd));
     FindClose(h);
@@ -3943,7 +3952,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 3. Classify patch paks
     logf("Scanning patch paks...\n");
     std::vector<PakInfo> our_paks, mod_paks;
-    classify_patch_paks(pak_dir, our_paks, mod_paks);
+    int stage_pak_num = 0;
+    classify_patch_paks(pak_dir, our_paks, mod_paks, stage_pak_num);
+    if (stage_pak_num)
+        logf("  patch_%03d: stage slots pak, not a costume mod (the costume pak goes above it)\n", stage_pak_num);
 
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
@@ -4010,7 +4022,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 3d. Fingerprint check for early exit
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos);
-    int max_mod_num = 0;
+    int max_mod_num = stage_pak_num;
     for (auto& pi : mod_paks) max_mod_num = std::max(max_mod_num, pi.num);
     int target_num = max_mod_num + 1;
     char target_name[128];
@@ -4026,6 +4038,15 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
                      target_name, std::chrono::duration<double,std::milli>(t1-t0).count());
+                log_close(); return 0;
+            }
+            // Same mods, our pak one number off (the stage pak came or went below it): it only
+            // has to move, the game reading the patch paks in an unbroken row from 001
+            if (our_paks.size() == 1 && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
+                auto t1 = std::chrono::high_resolution_clock::now();
+                logf("Up to date (fingerprint match), %s moved to %s in %.1f ms\n",
+                     our_paks[0].path.c_str(), target_name,
+                     std::chrono::duration<double,std::milli>(t1-t0).count());
                 log_close(); return 0;
             }
         }
