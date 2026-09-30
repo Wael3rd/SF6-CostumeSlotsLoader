@@ -95,8 +95,9 @@ end
 
 -- Preview textures of the variants, created once and kept for the session
 local holders = {}
+local SHOW_PREVIEWS = false          -- off: a generated preview texture crashed the loading thread (30/09)
 local function preview_holder(path)
-    if not path or path == "" then return nil end
+    if not SHOW_PREVIEWS or not path or path == "" then return nil end
     local h = holders[path]
     if h == nil then
         h = false
