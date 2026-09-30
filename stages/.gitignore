@@ -1,0 +1,11 @@
+# test data (downloaded mods)
+test_mods/
+# build outputs
+build/
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.dll
+*.exe
