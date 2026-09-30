@@ -7,8 +7,7 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
   amd_ags_x64.dll                       proxy AGS + loaders costumes et stages (build/amd_ags_x64.dll ;
                                         --costumes-only : build/costumes_only/amd_ags_x64.dll, sans stages)
   amd_ags_x64_real.dll                  la vraie bibliotheque AMD AGS du jeu (MIT), que le proxy relaie
-  reframework/autorun/SF6_CostumeSlots.lua, SF6_StageSlots.lua
-  reframework/plugins/SF6_CostumeSlotsNative.dll   (alias en match sur REFramework officiel)
+  reframework/plugins/SF6_CostumeSlotsNative.dll   (tout le jeu : menus, couleurs, alias en ligne, stages)
   reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv
   reframework/data/SF6_Costumes_Data/loader/static/*      (5 fichiers structurels + static_meta.json)
   reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt   (du depot, fins de ligne LF)
@@ -109,8 +108,7 @@ README_TXT = CRLF.join([
     "keeping the directory structure:",
     "  amd_ags_x64.dll             loader (AMD AGS proxy, loaded by the game itself)",
     "  amd_ags_x64_real.dll        the original AMD library, called by the proxy",
-    "  reframework/autorun/        Lua scripts (costume menus and colours, stage select)",
-    "  reframework/plugins/        native plugin (online matches)",
+    "  reframework/plugins/        native plugin: menus, colours, online, stage select (no Lua script)",
     "  reframework/data/           static tables, vanilla costume index, stage path index",
     "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders;",
     "                              SF6_CostumeAudit.bat there lists what is installed",
@@ -160,20 +158,16 @@ def main():
     if not os.path.exists(proxy) or is_real_ags(proxy): sys.exit(proxy + " manquant ou pas le proxy (build.bat ?)")
     if stages and b"stageslots-" not in open(proxy, "rb").read():
         sys.exit(proxy + " ne contient pas les stages (build.bat ?)")
-    lua = os.path.join(REPO, "costumes", "script", "SF6_CostumeSlots.lua")
     plugin = os.path.join(REPO, "build", "SF6_CostumeSlotsNative.dll")
     loader_dir = os.path.join(REF, "data", "SF6_Costumes_Data", "loader")
     files = [
         (proxy, "amd_ags_x64.dll"),
         (real, "amd_ags_x64_real.dll"),
-        (lua, "reframework/autorun/SF6_CostumeSlots.lua"),
         (plugin, "reframework/plugins/SF6_CostumeSlotsNative.dll"),
         (os.path.join(loader_dir, "vanilla_costume_index.tsv"), "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv"),
     ]
     for n in ("SF6_CostumeAudit.bat", "SF6_CostumeAudit.ps1"):
         files.append((os.path.join(REPO, "costumes", "audit", n), "reframework/costume_mods/" + n))
-    if stages:
-        files.append((os.path.join(REPO, "stages", "script", "SF6_StageSlots.lua"), "reframework/autorun/SF6_StageSlots.lua"))
     for n in sorted(os.listdir(os.path.join(loader_dir, "static"))):
         if n.lower().endswith((".md",)): continue
         files.append((os.path.join(loader_dir, "static", n), "reframework/data/SF6_Costumes_Data/loader/static/" + n))

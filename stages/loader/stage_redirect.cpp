@@ -29,7 +29,6 @@ const int MAX_PATH_CHARS = 1024;
 const long MAX_LOGGED = 5000;
 
 std::atomic<long> g_logged{0};
-std::atomic<long long> g_calls{0};
 std::atomic<long long> g_served{0};
 
 inline wchar_t lower(wchar_t c) { return (c >= L'A' && c <= L'Z') ? wchar_t(c + 32) : c; }
@@ -66,7 +65,6 @@ PathToHashFn g_original = nullptr;
 
 uint64_t detour(const wchar_t* path) {
     uint64_t h = g_original(path);
-    g_calls.fetch_add(1, std::memory_order_relaxed);
     const Active* a = g_active.load(std::memory_order_acquire);
     if (a == nullptr) return h;
     if (!a->traces.empty() && path) {
@@ -358,11 +356,16 @@ bool mtime_of(const wchar_t* path, FILETIME& ft) {
     return true;
 }
 
+// Sleeps until a file of SF6_StageSlots_Data changes (a change notification, no polling), or
+// until the hook delay ends when a variant is selected and nothing is hooked yet.
 DWORD WINAPI watcher(LPVOID) {
     FILETIME st_last{}, dbg_last{};
     bool st_seen = false, dbg_seen = false, first = true, hooked = false, gave_up = false;
-    long long last_calls = -1;
-    ULONGLONG last_stats = 0;
+    wchar_t dir[MAX_PATH];
+    wcscpy_s(dir, g_state_path);
+    if (wchar_t* sl = wcsrchr(dir, L'\\')) *sl = 0;
+    HANDLE change = FindFirstChangeNotificationW(dir, FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME);
+    if (change == INVALID_HANDLE_VALUE) slog("no change notification on %s: checked every second", narrow(dir).c_str());
     for (;;) {
         FILETIME st_ft{}, dbg_ft{};
         bool st_now = mtime_of(g_state_path, st_ft), dbg_now = mtime_of(g_debug_path, dbg_ft);
@@ -377,20 +380,15 @@ DWORD WINAPI watcher(LPVOID) {
             if (st_now) read_text(g_state_path, state);
             publish(state, read_traces());
         }
-        ULONGLONG now = GetTickCount64();
-        if (!hooked && !gave_up && g_active.load() != nullptr && now - g_start_tick >= HOOK_DELAY_MS) {
-            hooked = install_hook();
-            gave_up = !hooked;
+        DWORD wait = INFINITE;
+        if (!hooked && !gave_up && g_active.load() != nullptr) {
+            ULONGLONG since = GetTickCount64() - g_start_tick;
+            if (since >= HOOK_DELAY_MS) { hooked = install_hook(); gave_up = !hooked; }
+            else wait = static_cast<DWORD>(HOOK_DELAY_MS - since);
         }
-        if (hooked && now - last_stats >= 10000) {
-            last_stats = now;
-            long long c = g_calls.load();
-            if (c != last_calls) {
-                last_calls = c;
-                slog("stats: %lld paths hashed, %lld served from a variant", c, g_served.load());
-            }
-        }
-        Sleep(250);
+        if (change == INVALID_HANDLE_VALUE) { Sleep(wait == INFINITE ? 1000 : (wait < 1000 ? wait : 1000)); continue; }
+        WaitForSingleObject(change, wait);
+        FindNextChangeNotification(change);
     }
 }
 

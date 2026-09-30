@@ -40,7 +40,7 @@ SF6 Slots Loader.
 ## Checking what is installed
 
 Double-click `reframework\costume_mods\SF6_CostumeAudit.bat`. It changes nothing: it checks that the loader,
-REFramework, the Lua script and the native plugin are in place, says what the last launch did, lists the
+REFramework and the native plugin are in place, says what the last launch did, lists the
 costume mods it finds (Fluffy Mod Manager paks in the game folder, archives and folders in `costume_mods`)
 with the outfits each one gave, then the extra outfits by character. The report is saved as
 `SF6_CostumeAudit.txt` next to it: send it with `SF6_CostumeLoader.log` when reporting a problem.
@@ -90,8 +90,8 @@ before any engine code runs. That is the moment the loader does its work:
    costume to its new slot. Files made before a game update are brought up to date on the way (see below).
 4. It reads every slot back the way the game will load it, repairs what cannot load, and leaves out a slot it
    cannot repair instead of letting it stall the game. Only the slots in use are declared to the game.
-5. It writes a registry that the Lua script and the native plugin read to make the slots selectable and, online,
-   to show the other players a legal outfit. The registry also carries each slot's colour swatches.
+5. It writes a registry that the native plugin reads to make the slots selectable and, online, to show the
+   other players a legal outfit. The registry also carries each slot's colour swatches.
 
 A fingerprint of the installed mods is kept, so a launch with nothing changed costs about 20 ms. A launch after
 installing or removing a mod takes a few seconds, up to about fifteen with many large archives.
@@ -104,9 +104,11 @@ materials no longer match) and fixes them in its own pak, without touching the m
 [COMPATIBILITY.md](COMPATIBILITY.md) lists what it fixes and the mods tested; [TESTING.md](TESTING.md)
 lists what still needs testing.
 
-Online, the extra slot is aliased to a DriveTech outfit for the other players, so matchmaking stays valid. The
-menus are handled by the Lua script and the match itself by the native plugin, because official REFramework stops
-Lua scripts during online matches but not native plugins.
+Online, the extra slot is aliased to a DriveTech outfit for the other players, so matchmaking stays valid.
+Since 1.9.0 everything in game is done by one native REFramework plugin (no Lua script), driven by the game's
+own events: menus shown or closed, an outfit folder mounted, the stage select screen. A fight triggers none of
+them, so the plugin does nothing during a fight. Official REFramework stops Lua scripts during online matches,
+not native plugins. See [plugin/README.md](plugin/README.md).
 
 ## Repository layout
 
@@ -115,11 +117,10 @@ build.bat            builds everything into build/
 common/              shared by both loaders: KPKA pak reader and writer, archive reading, third party code
 proxy/               the AGS proxy: one DllMain for the stage and costume passes
 costumes/loader/     costume loader: mod detection, slot relocation, scene and material patching
-costumes/plugin/     native REFramework plugin, used during online matches
-costumes/script/     Lua script, used in menus (slot selection, colours, ownership)
 costumes/tools/      generators for the data files, run against your own game installation
 costumes/audit/      SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
-stages/              stage slots: loader pass, redirection, stage select script, tools, notes
+stages/              stage slots: loader pass, redirection, tools, notes
+plugin/              native REFramework plugin: menus, ownership, colours, online alias, stage select, VS screen
 packaging/           builds the distributable zip
 ```
 
@@ -170,7 +171,7 @@ REFramework in `dinput8.dll`, official build 1.5.8 or newer.
 
 Written by Wael. Released under the MIT licence, see `LICENSE`.
 
-Third party code is vendored under `common/third_party/`, `costumes/plugin/include/` and
+Third party code is vendored under `common/third_party/`, `plugin/include/` and
 `stages/loader/third_party/`: the zstd decompressor, miniz, bcdec, the LZMA SDK 7z decoder, UnRAR, the
 REFramework plugin API and the stb image libraries. See `THIRD_PARTY.md` for their licences.
 

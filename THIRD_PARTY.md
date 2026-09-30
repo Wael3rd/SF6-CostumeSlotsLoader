@@ -45,7 +45,7 @@ safe to run inside `DllMain` (no worker threads, no on-demand `Crypt32.dll`); th
 
 This code is not under the MIT licence of the rest of the repository.
 
-## REFramework plugin API — `costumes/plugin/include/reframework/API.{h,hpp}`
+## REFramework plugin API — `plugin/include/reframework/API.{h,hpp}`
 
 Headers from [REFramework](https://github.com/praydog/REFramework) by praydog, MIT licence, taken at tag
 v1.5.8. They define the C interface a native plugin uses to reach the game through REFramework.

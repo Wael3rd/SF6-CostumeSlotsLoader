@@ -90,8 +90,9 @@ if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
 if errorlevel 1 goto :failed
 
-echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8) ===
-cl /nologo /std:c++20 /EHa /O2 /W4 /LD /I costumes\plugin\include /Fo%O%\tools\ costumes\plugin\SF6_CostumeSlotsNative.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
+echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and stage slots in game) ===
+if not exist %O%\plugin mkdir %O%\plugin
+cl /nologo /std:c++20 /EHa /O2 /W4 /LD /I plugin\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\costumes.cpp plugin\src\stages.cpp plugin\src\main.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
 if errorlevel 1 goto :failed
 
 echo.

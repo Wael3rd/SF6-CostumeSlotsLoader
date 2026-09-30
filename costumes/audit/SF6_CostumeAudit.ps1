@@ -48,8 +48,8 @@ if (Test-Path $proxy) {
 Check 'Loader (amd_ags_x64.dll)' $isProxy 'install the Costume Slots Loader archive'
 Check 'Original AMD library (amd_ags_x64_real.dll)' (Test-Path (Join-Path $game 'amd_ags_x64_real.dll')) 'reinstall the loader archive'
 Check 'REFramework (dinput8.dll)' (Test-Path (Join-Path $game 'dinput8.dll')) 'install REFramework 1.5.8 or newer'
-Check 'Lua script (reframework\autorun\SF6_CostumeSlots.lua)' (Test-Path (Join-Path $ref 'autorun\SF6_CostumeSlots.lua')) 'reinstall the loader archive'
-Check 'Native plugin (reframework\plugins\SF6_CostumeSlotsNative.dll)' (Test-Path (Join-Path $ref 'plugins\SF6_CostumeSlotsNative.dll')) 'reinstall the loader archive (needed online)'
+Check 'Native plugin (reframework\plugins\SF6_CostumeSlotsNative.dll)' (Test-Path (Join-Path $ref 'plugins\SF6_CostumeSlotsNative.dll')) 'reinstall the loader archive (menus, colours, online)'
+if (Test-Path (Join-Path $ref 'autorun\SF6_CostumeSlots.lua')) { Say '  [INFO]    autorun\SF6_CostumeSlots.lua is left from a version before 1.9: the plugin renames it at the next launch' }
 Check 'Loader tables (reframework\data\SF6_Costumes_Data\loader)' (Test-Path (Join-Path $data 'loader\static\static_meta.json')) 'reinstall the loader archive'
 $chain = Join-Path $game 'amd_ags_x64_chain.dll'
 if (Test-Path $chain) { Say '  [INFO]    amd_ags_x64_chain.dll present: another tool is chained behind the loader' }

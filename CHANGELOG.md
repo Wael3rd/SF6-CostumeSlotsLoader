@@ -2,6 +2,16 @@
 
 ## 1.9.0 (2026-09-30)
 
+### Changed
+- **No more Lua scripts.** Everything in game is done by the native plugin `SF6_CostumeSlotsNative.dll`: the
+  costume menus, ownership, colours and select screen data, the online alias, the stage select screen and the
+  VS screen. It is driven by the game's own events (a menu shown or closed, an outfit folder mounted, the stage
+  select screen shown, UP / DOWN) instead of looking at the game every frame: during a fight it does nothing.
+  An update made by hand leaves the old scripts in `reframework/autorun/`: the plugin renames them to
+  `.lua.old`.
+- The loader's stage watcher sleeps until the stage choice file changes (a change notification) instead of
+  looking at it four times a second, and the stage redirection no longer counts the files it sees.
+
 ### Added
 - **Stage slots (experimental).** Stage mods dropped as downloaded in `reframework/stage_mods/` (`.zip`,
   `.7z`, `.rar`, a folder with a `natives` tree, a `.pak`) become variants of the stage they change. On the
@@ -26,6 +36,12 @@
   out, the costume pak stays above it, and when only its presence changed the costume pak is moved instead of
   rebuilt. The first launch after updating rebuilds the costumes once.
 - `outfits.json` (read by the audit) follows the costume pak when it changes number.
+- **A mod's own Havok cloth is used by its slot.** A slot kept the game's cloth file of the original outfit on
+  the mod's body (Lily Kenyan Summer C2); it now gets its own copy pointing at the mod's cloth, as for chain
+  physics. The model folder's havok references are no longer renamed into files that exist nowhere.
+- **Weapons show on the character select screen.** The slot's weapon list was loaded late: the first player to
+  pick the outfit had no weapons there (Lily Kenyan Summer C2). Both of the scene's references now point at the
+  slot's list.
 
 ## 1.8.1 (2026-09-30)
 

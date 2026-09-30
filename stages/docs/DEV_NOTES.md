@@ -89,7 +89,8 @@ or the result menu's Change Stage.
 
 - Game folder `amd_ags_x64.dll` = root `build.bat` output `build\amd_ags_x64.dll` (costume + stage slots).
   Copy it with the game closed. `build\costumes_only\` is the release build without stage slots (no hook).
-- Also deployed: `stages/script/SF6_StageSlots.lua` to `reframework/autorun/`,
+- Also deployed: `build/SF6_CostumeSlotsNative.dll` to `reframework/plugins/` (the stage select part is in
+  `plugin/src/stages.cpp` since 1.9.0; the Lua script is gone),
   `stages/data/loader/stage_paths.txt` to `reframework/data/SF6_StageSlots_Data/loader/`. A git checkout
   may turn `stage_paths.txt` to CRLF: the loader reads both, but its size is part of the stage fingerprint,
   so copying a checkout with other line endings rebuilds the stage pak once (a few seconds).

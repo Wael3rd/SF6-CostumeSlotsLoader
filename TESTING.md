@@ -34,6 +34,15 @@ folder; the loader rewrites it at every launch where something changed.
 
 ## New in 1.9.0, to check in game
 
+- **Online alias with the native plugin** (the Lua scripts are gone): choose a slot in Battle Settings, close
+  the menu, play a casual or ranked match. You see the slot, the other player DriveTech. The plugin's log
+  (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) shows `DriveTech mounted`, `slot vN mounted`,
+  `manifest vN -> v4 = 1`.
+- Checked offline on 2026-09-30: boot (colour records, select screen data, ownership), ownership given back
+  after the title screen, Battle Settings shown and closed (intents kept when entering Versus), stage select
+  (hints, previews, UP / DOWN, Change Stage from the result screen), VS screen, a battle on NULSPACE, weapons
+  of Lily's mods on the select screen, and nothing in the log during fights.
+
 - **First launch after updating**: the costumes are rebuilt once (the stage pak no longer counts in their
   fingerprint), then `Up to date` again. Adding or removing a stage mod afterwards must not rebuild the
   costumes (`SF6_CostumeLoader.log`: `stage slots pak, not a costume mod`, then `Up to date`).
@@ -49,7 +58,7 @@ folder; the loader rewrites it at every launch where something changed.
 
 - **Colour swatches** (experimental): in the costume menu, the two squares of each colour of a modded
   outfit should differ from colour to colour and look like the outfit; the original outfits must keep
-  Capcom's squares. The Lua log (`reframework\data\SF6_CostumeSlots_data\log.json`) reports
+  Capcom's squares. The plugin's log (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) reports
   `pastilles propres=N`, the number of colours given their own squares.
 
 ## Loader paths never triggered by a real mod

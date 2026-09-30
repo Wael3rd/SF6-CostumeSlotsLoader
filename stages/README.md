@@ -12,14 +12,14 @@ their own, and served in place of the original files only while that mod is sele
 ## Install and use
 
 Stage Slots is part of [SF6 Slots Loader](../README.md): it ships in the same `amd_ags_x64.dll` as the
-costume slots (`build\amd_ags_x64.dll`, see *How it works*), plus a Lua script. It is in the releases since
+costume slots (`build\amd_ags_x64.dll`, see *How it works*), plus the native plugin. It is in the releases since
 1.9.0 as an **experimental** feature: the release archive puts every file below in place. You need REFramework
 in `dinput8.dll` (without it the stage pak is built but nothing can be selected).
 
 | File | Where |
 |---|---|
 | `build/amd_ags_x64.dll` (costume slots + stage slots) | game folder |
-| `stages/script/SF6_StageSlots.lua` | `reframework/autorun/` |
+| `build/SF6_CostumeSlotsNative.dll` (native plugin) | `reframework/plugins/` |
 | `stages/data/loader/stage_paths.txt` | `reframework/data/SF6_StageSlots_Data/loader/` |
 
 Put stage mods **as downloaded** in `reframework/stage_mods/`: the `.zip`, `.7z` or `.rar` file itself, a
@@ -82,9 +82,10 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
    detour, which swaps the hash of each vanilla file the selected variant replaces for its copy's hash. A
    tool that hooked the function first (HARD READ) stays in the chain. The selection is re-read from
    `state.json` when it changes.
-4. **Lua script** (`stages/script/SF6_StageSlots.lua`). Counts UP / DOWN on the stage select agent, writes
-   `state.json`, and shows the variant: name and preview on the stage select screen, name and image on the
-   VS screen. Game thread only (`LateUpdateBehavior`), no text written twice.
+4. **Native plugin** (`plugin/src/stages.cpp`, in `SF6_CostumeSlotsNative.dll`). Hooks on the stage select
+   screen (shown, hidden, focus and preview changed), on UP / DOWN of its UI agent and on the VS screen: the
+   variant's name between UP / DOWN hints and its preview, `state.json` written for the loader. Game thread
+   only, texts written only when they differ, nothing done between events.
 
 Outputs, in `reframework/data/SF6_StageSlots_Data`: `registry.json` (variants per stage, for the script),
 `loader/variants.tsv` (the same with every redirection), `state.json` (selection). Log:
