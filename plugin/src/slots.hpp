@@ -55,7 +55,7 @@ enum Event : uint32_t {
     EV_MENU_CLOSE    = 1u << 1,   // Battle Settings closed
     EV_SELECT_START  = 1u << 2,   // character select screen started
     EV_SELECT_END    = 1u << 3,   // character select screen ended
-    EV_FOLDER        = 1u << 4,   // an outfit folder of interest was mounted or unmounted
+    EV_HOLDER        = 1u << 4,   // an outfit's visual manifest was created: the game mounted its folder
     EV_STAGE_SHOW    = 1u << 5,   // stage select screen shown
     EV_STAGE_HIDE    = 1u << 6,   // stage select screen hidden
     EV_STAGE_DIRTY   = 1u << 7,   // focus changed, or the game rewrote the name / the preview

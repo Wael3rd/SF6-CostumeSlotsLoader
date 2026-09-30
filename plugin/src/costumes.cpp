@@ -8,7 +8,9 @@
 //     screen that lists outfits opens;
 //   - online alias: Battle Settings keeps DriveTech in the save, which is what other players see,
 //     and the slot chosen there as an intent; when the game mounts DriveTech's folder for a match,
-//     the slot's folder is mounted too and its visual manifest copied over DriveTech's.
+//     the slot's folder is mounted too and its visual manifest copied over DriveTech's. A mount is
+//     seen through the manifest's constructor (FighterVisualHolder..ctor): via.Folder.activate is a
+//     native method the engine calls internally, its hook only saw our own calls (30/09).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 
@@ -51,20 +53,17 @@ struct Fighter {
     // alias
     Obj* src_folder = nullptr;
     uintptr_t swapped_addr = 0;
+    // colour swap in a CCVD: entries csw_a / csw_b hold each other's data (csw_da, csw_db before)
     bool has_csw = false; uintptr_t csw_addr = 0; int csw_a = 0, csw_b = 0;
+    uintptr_t csw_da = 0, csw_db = 0;
     uint32_t last_mount = 0;
-    uint32_t seek_until = 0;         // mounting in progress until this frame
-    bool unmount = false;            // DriveTech was unmounted: put the colours back
     std::string last_sig;
 };
 std::map<int, Fighter> g_f;
 
-// Folders the hooks compare against: DriveTech's folder of every character with an intent
-constexpr int kMaxWatch = 64;
-std::atomic<uintptr_t> g_watch[kMaxWatch];
-int g_watch_fid[kMaxWatch];
-std::atomic<int> g_watch_n{0};
-std::atomic<uint64_t> g_mounted{0}, g_unmounted{0};
+// Alias check after an outfit mount, until this frame (0: none). Each mount pushes it further.
+uint32_t g_mount_until = 0;
+bool g_select_logged = false;
 
 // ---- progress ----
 bool g_boot_done = false;
@@ -141,8 +140,6 @@ void save_state() {
     if (!write_file(kState, o)) logf("costumes: cannot write state.json");
 }
 
-void update_watch();
-
 void set_intent_slot(int fid, int slot, const char* why) {
     auto& in = g_intent[fid];
     if (in.slot == slot) return;
@@ -152,7 +149,6 @@ void set_intent_slot(int fid, int slot, const char* why) {
     logf("[F%d] intent slot = %d (%s)", fid, slot, why);
     auto& f = g_f[fid];
     f.src_folder = nullptr; f.swapped_addr = 0;
-    update_watch();
 }
 void set_intent_color(int fid, int color, const char* why) {
     auto& in = g_intent[fid];
@@ -235,7 +231,7 @@ void find_dst_all() {
         return true;
     });
     g_dst_done = want.empty();
-    if (g_dst_done) { logf("costumes: DriveTech folders found"); update_watch(); }
+    if (g_dst_done) logf("costumes: DriveTech folders found");
 }
 
 Obj* find_folder(const std::string& suffix) {
@@ -249,21 +245,6 @@ Obj* find_folder(const std::string& suffix) {
         return true;
     });
     return found;
-}
-
-// The hooks watch DriveTech's folder of the characters that have an intent
-void update_watch() {
-    int n = 0;
-    for (int fid : g_fighters) {
-        auto in = g_intent.find(fid);
-        if (in == g_intent.end() || !in->second.slot) continue;
-        auto& fr = g_f[fid];
-        if (!fr.dst_folder || n >= kMaxWatch) continue;
-        g_watch_fid[n] = fid;
-        g_watch[n].store(reinterpret_cast<uintptr_t>(fr.dst_folder), std::memory_order_relaxed);
-        ++n;
-    }
-    g_watch_n.store(n, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -601,20 +582,27 @@ std::string holder_folder_path(Obj* comp) {
     return fld ? fld_path(fld) : std::string{};
 }
 
-bool ccvd_swap(Obj* ccvd, int a, int b) {
-    auto* colors = get_obj(ccvd, "Colors");
+// Entries a and b of a CCVD's colour list (Colors: List<{ColorId, Data}>)
+bool ccvd_pair(Obj* ccvd, int a, int b, Obj*& ea, Obj*& eb) {
+    ea = eb = nullptr;
+    auto* colors = ccvd ? get_obj(ccvd, "Colors") : nullptr;
     int n = list_count(colors);
-    Obj *ea = nullptr, *eb = nullptr;
     for (int i = 0; i < n; ++i) {
         auto* it = list_item(colors, i);
         int32_t id = -1;
         if (it && get_i32(it, "ColorId", id)) { if (id == a) ea = it; else if (id == b) eb = it; }
     }
-    if (!ea || !eb) return false;
-    auto* da = get_obj(ea, "Data"); auto* db = get_obj(eb, "Data");
-    if (!da || !db) return false;
-    set_obj(ea, "Data", db); set_obj(eb, "Data", da);
-    return true;
+    return ea && eb;
+}
+
+// Whether this CCVD holds the fighter's swap: its two entries hold each other's data. Checked on
+// the data, not on the CCVD's address: a CCVD loaded again for the next match can take the address
+// of the one freed, unswapped.
+bool swap_in_place(const Fighter& fr, Obj* ccvd) {
+    Obj *ea, *eb;
+    if (!fr.has_csw || !ccvd_pair(ccvd, fr.csw_a, fr.csw_b, ea, eb)) return false;
+    return reinterpret_cast<uintptr_t>(get_obj(ea, "Data")) == fr.csw_db
+        && reinterpret_cast<uintptr_t>(get_obj(eb, "Data")) == fr.csw_da;
 }
 
 // DriveTech only has the colours of the master table; another colour announced to the network is a
@@ -622,48 +610,67 @@ bool ccvd_swap(Obj* ccvd, int a, int b) {
 void apply_color(int fid, Obj* d_set) {
     auto& fr = g_f[fid];
     int want = g_intent[fid].color;
-    if (want < 0 || fr.has_csw || (fr.base_known && fr.base_colors.count(want))) return;
+    if (want < 0 || (fr.base_known && fr.base_colors.count(want))) return;
     auto* ccvd = get_obj(d_set, "costumeColorVariation");
     if (!ccvd) { logf("[F%d] colour: no costumeColorVariation", fid); return; }
-    if (ccvd_swap(ccvd, fr.base_min, want)) {
-        fr.has_csw = true; fr.csw_addr = reinterpret_cast<uintptr_t>(ccvd); fr.csw_a = fr.base_min; fr.csw_b = want;
-        logf("[F%d] colour %d placed under colour %d", fid, want, fr.base_min);
-    } else logf("[F%d] colour: entries %d/%d not found", fid, fr.base_min, want);
+    if (fr.csw_b == want && swap_in_place(fr, ccvd)) return;   // this CCVD is swapped already
+    Obj *ea, *eb;
+    Obj *da = nullptr, *db = nullptr;
+    if (ccvd_pair(ccvd, fr.base_min, want, ea, eb)) { da = get_obj(ea, "Data"); db = get_obj(eb, "Data"); }
+    if (!da || !db) { logf("[F%d] colour: entries %d/%d not found", fid, fr.base_min, want); return; }
+    set_obj(ea, "Data", db); set_obj(eb, "Data", da);
+    fr.has_csw = true; fr.csw_addr = reinterpret_cast<uintptr_t>(ccvd); fr.csw_a = fr.base_min; fr.csw_b = want;
+    fr.csw_da = reinterpret_cast<uintptr_t>(da); fr.csw_db = reinterpret_cast<uintptr_t>(db);
+    logf("[F%d] colour %d placed under colour %d", fid, want, fr.base_min);
 }
 
-// Put back through a live object read again (the source folder's CCVD), never a kept pointer
+// Put back through a live object read again (the slot's CCVD), never a kept pointer
 void restore_color(int fid, Obj* src_h) {
     auto& fr = g_f[fid];
     if (!fr.has_csw) return;
     auto* s_set = src_h ? get_obj(src_h, "_Setting") : nullptr;
     auto* ccvd = s_set ? get_obj(s_set, "costumeColorVariation") : nullptr;
-    if (ccvd && reinterpret_cast<uintptr_t>(ccvd) == fr.csw_addr) logf("[F%d] colour put back = %d", fid, ccvd_swap(ccvd, fr.csw_a, fr.csw_b) ? 1 : 0);
-    else logf("[F%d] colour: source CCVD changed, nothing put back", fid);
+    Obj *ea, *eb;
+    if (swap_in_place(fr, ccvd) && ccvd_pair(ccvd, fr.csw_a, fr.csw_b, ea, eb)) {
+        auto* da = get_obj(ea, "Data"); auto* db = get_obj(eb, "Data");
+        set_obj(ea, "Data", db); set_obj(eb, "Data", da);
+        logf("[F%d] colour put back", fid);
+    } else logf("[F%d] colour: the slot's CCVD was loaded again, nothing to put back", fid);
     fr.has_csw = false;
+}
+
+// The manifests present now, with their folder's path (read once per pass, for every character)
+struct Holder { Obj* comp; std::string path; };
+std::vector<Holder> read_holders() {
+    std::vector<Holder> out;
+    if (!cache_folder_methods()) return out;
+    auto comps = find_components(td_holder);
+    int n = list_count(comps);
+    for (int i = 0; i < n; ++i) {
+        auto* c = list_item(comps, i);
+        if (!c) continue;
+        auto p = holder_folder_path(c);
+        if (!p.empty()) out.push_back({c, std::move(p)});
+    }
+    return out;
 }
 
 // One pass of the mount: the slot's folder is mounted once the game has mounted DriveTech's
 // (never before: the game skips mounting DriveTech when a folder of the character is already
 // active, and the load hangs), then DriveTech's manifest is overwritten with the slot's.
 // true when done.
-bool mount_pass(int fid) {
+bool mount_pass(int fid, const std::vector<Holder>& hs) {
     auto& fr = g_f[fid];
     int slot = g_intent[fid].slot;
-    if (!slot || fr.dst_path.empty() || !cache_folder_methods()) return true;
-    auto comps = find_components(td_holder);
-    int n = list_count(comps);
+    if (!slot || fr.dst_path.empty()) return true;
     std::string sfx = slot_suffix(fid, slot);
     Obj *src_h = nullptr, *dst_h = nullptr;
-    for (int i = 0; i < n; ++i) {
-        auto* c = list_item(comps, i);
-        if (!c) continue;
-        auto p = holder_folder_path(c);
-        if (p.empty()) continue;
-        if (ends_with(p, sfx)) src_h = c;
-        else if (p == fr.dst_path && !dst_h) dst_h = c;   // the first DriveTech only (mirror match: known limit)
+    for (auto& h : hs) {
+        if (ends_with(h.path, sfx)) src_h = h.comp;
+        else if (h.path == fr.dst_path && !dst_h) dst_h = h.comp;   // the first DriveTech only (mirror match: known limit)
     }
     char sig[32]; snprintf(sig, sizeof sig, "src=%s dst=%s", src_h ? "y" : "-", dst_h ? "y" : "-");
-    if (fr.last_sig != sig) { logf("[F%d] holders %s (n=%d, v%d)", fid, sig, n, slot); fr.last_sig = sig; }
+    if (fr.last_sig != sig) { logf("[F%d] holders %s (n=%zu, v%d)", fid, sig, hs.size(), slot); fr.last_sig = sig; }
 
     if (dst_h && !src_h) {
         if (!fr.src_folder || !alive(fr.src_folder)) fr.src_folder = find_folder(sfx);
@@ -683,6 +690,7 @@ bool mount_pass(int fid) {
         auto* s_set = get_obj(src_h, "_Setting");
         auto* d_set = get_obj(dst_h, "_Setting");
         if (!s_set || !d_set) return false;
+        restore_color(fid, src_h);   // a swap left from the previous match, if its CCVD is still there
         auto ow = call(d_set, "overwrite", { arg_obj(s_set) });
         logf("[F%d] manifest v%d -> v%d = %d", fid, slot, BASE_COS, ow.exception_thrown ? 0 : 1);
         fr.swapped_addr = addr;
@@ -692,33 +700,31 @@ bool mount_pass(int fid) {
     return false;
 }
 
-void unmount_pass(int fid) {
-    auto& fr = g_f[fid];
-    if (fr.has_csw && cache_folder_methods()) {
-        auto comps = find_components(td_holder);
-        int n = list_count(comps), slot = g_intent[fid].slot;
+// Between matches (a screen that shows the slot as an outfit of its own): its colours put back
+void restore_all() {
+    bool any = false;
+    for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; any |= fr.has_csw; }
+    if (!any) return;
+    auto hs = read_holders();
+    for (auto& [fid, fr] : g_f) {
+        if (!fr.has_csw) continue;
+        int slot = g_intent[fid].slot;
         std::string sfx = slot ? slot_suffix(fid, slot) : std::string{};
         Obj* src_h = nullptr;
-        for (int i = 0; i < n && !sfx.empty(); ++i)
-            if (auto* c = list_item(comps, i); c && ends_with(holder_folder_path(c), sfx)) { src_h = c; break; }
+        for (auto& h : hs) if (!sfx.empty() && ends_with(h.path, sfx)) { src_h = h.comp; break; }
         restore_color(fid, src_h);
     }
-    fr.swapped_addr = 0;
 }
 
-// ---- hooks: via.Folder activate / deactivate, compared with the watched folders ----
-void folder_event(void* folder, std::atomic<uint64_t>& bits) {
-    int n = g_watch_n.load(std::memory_order_acquire);
-    uintptr_t f = reinterpret_cast<uintptr_t>(folder);
-    for (int i = 0; i < n; ++i)
-        if (g_watch[i].load(std::memory_order_relaxed) == f) { bits.fetch_or(1ull << i); post(EV_FOLDER); return; }
+bool any_intent() {
+    for (auto& [fid, in] : g_intent) if (in.slot) return true;
+    return false;
 }
-int pre_activate(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (argc >= 2) folder_event(argv[1], g_mounted);
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-int pre_deactivate(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (argc >= 2) folder_event(argv[1], g_unmounted);
+
+// ---- hook: an outfit's visual manifest created (the game mounted its folder) ----
+// May run on a loading thread: it only records the event.
+int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    post(EV_HOLDER);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -746,8 +752,7 @@ void init() {
 void install_hooks() {
     if (g_slots.empty()) { logf("costumes: no slot, no hook"); return; }
     auto* tdb = api().tdb();
-    hook_all(tdb->find_type("via.Folder"), "activate", pre_activate, nullptr);
-    hook_all(tdb->find_type("via.Folder"), "deactivate", pre_deactivate, nullptr);
+    hook_all(tdb->find_type("app.battle.assets.FighterVisualHolder"), ".ctor", pre_holder_ctor, nullptr);
     auto* ms = tdb->find_type("app.UIFlowMatchingSetting.Param");
     hook_all(ms, "CreatedObject", pre_menu_open, nullptr);
     hook_all(ms, "ShowedObject", pre_menu_open, nullptr);
@@ -767,8 +772,7 @@ void install_hooks() {
 bool busy() {
     if (g_slots.empty()) return false;
     if (!g_boot_done || g_revoke_cursor >= kStaticMin || g_color_cursor >= kColorMin) return true;
-    for (auto& [fid, fr] : g_f) if (fr.seek_until || fr.unmount) return true;
-    return false;
+    return g_mount_until != 0;
 }
 
 void tick(uint32_t ev) {
@@ -804,31 +808,34 @@ void tick(uint32_t ev) {
     if ((ev & EV_MENU_CLOSE) && g_menu_open) { g_menu_open = false; on_menu_close(); safety_net(); }
     if (ev & (EV_SELECT_START | EV_SELECT_END)) safety_net();
 
-    // ---- DriveTech mounted or unmounted for a character with an intent ----
-    // On the character select screen the slot is a real outfit and the screen mounts folders
-    // itself: a mount seen there is not ours to follow, and a mount in progress stops there.
-    // (the screen's own flow list says whether it is open: read when a mount is seen, never watched)
-    if (ev & EV_SELECT_START)
-        for (auto& [fid, fr] : g_f) if (fr.seek_until) { fr.seek_until = 0; logf("[F%d] mount: select screen, left alone", fid); }
-    if (ev & EV_FOLDER) {
-        uint64_t up = g_mounted.exchange(0), down = g_unmounted.exchange(0);
-        bool select = up && select_screen_active();
-        int n = g_watch_n.load();
-        for (int i = 0; i < n; ++i) {
-            int fid = g_watch_fid[i];
-            if (down & (1ull << i)) { g_f[fid].unmount = true; g_f[fid].seek_until = 0; logf("[F%d] DriveTech unmounted", fid); }
-            if (up & (1ull << i)) {
-                if (select) logf("[F%d] DriveTech mounted by the select screen: left alone", fid);
-                else { g_f[fid].seek_until = g_frame + 60 * 20; logf("[F%d] DriveTech mounted", fid); }
+    // ---- online alias: an outfit was mounted ----
+    // Between matches, on a screen that shows the slot as an outfit of its own, its colours are put
+    // back. On the character select screen the slot is a real outfit and the screen mounts folders
+    // itself: a mount seen there is not ours to follow, and a check in progress stops there. (The
+    // screen's own flow list says whether it is open: read when a mount is seen, never watched.)
+    // Elsewhere a mount opens a short check, pushed further by each mount (the slot's own folder,
+    // mounted by the check, is one): the manifests present are read every 3 frames until it ends,
+    // during the loading screen. A check that finds the select screen open stops.
+    if ((ev & (EV_SELECT_START | EV_MENU_OPEN)) && !g_mount_until) restore_all();
+    if ((ev & EV_HOLDER) && any_intent() && g_dst_done) {
+        if (select_screen_active()) {
+            if (!g_select_logged) { logf("costumes: outfit mounted by the select screen, left alone"); g_select_logged = true; }
+        } else {
+            g_select_logged = false;
+            if (!g_mount_until) {
+                logf("costumes: outfit mounted, alias check");
+                for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; fr.last_sig.clear(); }
             }
+            g_mount_until = g_frame + 60 * 2;
         }
     }
-    for (auto& [fid, fr] : g_f) {
-        if (fr.unmount) { fr.unmount = false; unmount_pass(fid); }
-        if (!fr.seek_until) continue;
-        if (g_frame >= fr.seek_until) { fr.seek_until = 0; logf("[F%d] mount: gave up", fid); continue; }
-        if (g_frame % 3) continue;
-        if (mount_pass(fid)) fr.seek_until = 0;
+    if (g_mount_until) {
+        if (g_frame >= g_mount_until) { g_mount_until = 0; logf("costumes: alias check done"); }
+        else if (g_frame % 3 == 0) {
+            if (select_screen_active()) { g_mount_until = 0; logf("costumes: alias check stopped (select screen)"); return; }
+            auto hs = read_holders();
+            for (auto& [fid, in] : g_intent) if (in.slot) mount_pass(fid, hs);
+        }
     }
 }
 

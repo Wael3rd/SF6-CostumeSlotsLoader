@@ -34,14 +34,16 @@ folder; the loader rewrites it at every launch where something changed.
 
 ## New in 1.9.0, to check in game
 
-- **Online alias with the native plugin** (the Lua scripts are gone): choose a slot in Battle Settings, close
-  the menu, play a casual or ranked match. You see the slot, the other player DriveTech. The plugin's log
-  (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) shows `DriveTech mounted`, `slot vN mounted`,
-  `manifest vN -> v4 = 1`.
-- Checked offline on 2026-09-30: boot (colour records, select screen data, ownership), ownership given back
-  after the title screen, Battle Settings shown and closed (intents kept when entering Versus), stage select
-  (hints, previews, UP / DOWN, Change Stage from the result screen), VS screen, a battle on NULSPACE, weapons
-  of Lily's mods on the select screen, and nothing in the log during fights.
+- Checked on 2026-09-30: boot (colour records, select screen data, ownership), ownership given back after the
+  title screen, Battle Settings shown and closed (intents kept when entering Versus), stage select (hints,
+  previews, UP / DOWN, Change Stage from the result screen), VS screen, a battle on NULSPACE, weapons of Lily's
+  mods on the select screen, nothing in the log during fights, and **the online alias with the native plugin**:
+  three online matches with Lily Kenyan Summer C2 on DriveTech, its clubs and colour 3, the colour put back
+  between matches. The plugin's log (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) shows
+  `outfit mounted, alias check`, `manifest vN -> v4 = 1`, `alias check done`.
+- **The alias without going online**: set the character and its slot in Battle Settings (R on the Fighting
+  Ground menu), go back to the main menu and press R (Training Mode): training loads that character in
+  DriveTech without the character select screen, as an online match does, and the slot must show.
 
 - **First launch after updating**: the costumes are rebuilt once (the stage pak no longer counts in their
   fingerprint), then `Up to date` again. Adding or removing a stage mod afterwards must not rebuild the

@@ -20,7 +20,8 @@ when it is done:
 | character select started (`app.battle.bBattleFighterSelectFlow.start`, `app.UIFlowUI10501.Start`) | ownership, save safety net |
 | Battle Settings shown (`app.UIFlowMatchingSetting.Param.CreatedObject` / `ShowedObject`) | the save shows the slot chosen there |
 | Battle Settings closed (`HidObject`, `OnEnd`; only after an open) | the slot becomes the intent, the save gets DriveTech (what other players see) |
-| DriveTech's folder mounted / unmounted (`via.Folder.activate` / `deactivate`, compared with the folders of the characters that have an intent) | the slot's folder is mounted and its manifest copied over DriveTech's, the colour placed under a colour DriveTech has; put back on unmount |
+| an outfit's visual manifest created (`app.battle.assets.FighterVisualHolder..ctor`: the game mounted its folder), outside the character select screen | for two seconds (the loading screen), for each character with an intent: once DriveTech's manifest is there, the slot's folder is mounted, its manifest copied over DriveTech's, the colour placed under a colour DriveTech has |
+| Battle Settings shown, character select started (between matches) | the colours of the last alias put back |
 | stage select shown / hidden, focus or preview changed (`app.menu.UIFlowStageSelect.Param`) | the variant's name between UP / DOWN hints, its preview |
 | UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous variant, `state.json` for the loader |
 | VS screen activated or rewritten (`app.esports.VSInfoOffline`) | the variant's name and image |
@@ -45,5 +46,5 @@ Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramewo
 ## Known limits
 
 - Mirror match online: when the opponent has DriveTech of the same character, the first DriveTech found is used.
-- The online alias was tested with the Lua scripts; its native events (`via.Folder.activate`) are to be checked
-  in an online match (see TESTING.md).
+- `via.Folder.activate` / `deactivate` are not usable as events: the engine mounts folders without going through
+  them (a hook on them sees only the plugin's own calls). The manifest's constructor is.

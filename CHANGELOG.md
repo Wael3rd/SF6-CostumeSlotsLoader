@@ -7,6 +7,8 @@
   costume menus, ownership, colours and select screen data, the online alias, the stage select screen and the
   VS screen. It is driven by the game's own events (a menu shown or closed, an outfit folder mounted, the stage
   select screen shown, UP / DOWN) instead of looking at the game every frame: during a fight it does nothing.
+  An outfit mount is seen when the game creates the outfit's visual manifest; the online alias then checks
+  for two seconds, during the loading screen, and stops. Played online on 2026-09-30.
   An update made by hand leaves the old scripts in `reframework/autorun/`: the plugin renames them to
   `.lua.old`.
 - The loader's stage watcher sleeps until the stage choice file changes (a change notification) instead of
@@ -22,11 +24,13 @@
   of the original files only while selected, through one hook on the engine's path hashing that is installed
   only once a variant is selected. The choice is local and applies to every load of the stage, online too;
   online play has not been tested. Details and limits: [stages/README.md](stages/README.md).
+- `SF6_CostumeLoader.log` names every file of a mod that its slot does not show
+  (`WARN: the slot loads ... from the game`): what to send when a part of a mod is missing.
 
 ### Repository
 - **Renamed SF6-SlotsLoader** (was SF6-CostumeSlotsLoader; the old links lead here). It now also holds the
   stage slots (`stages/`): on the stage select screen, UP / DOWN cycles a stage through its mods. They ship in
-  the same `amd_ags_x64.dll`, are in development and are not in the releases yet. Layout: `costumes/`,
+  the same `amd_ags_x64.dll` (experimental, see *Added*). Layout: `costumes/`,
   `stages/`, `common/` (pak and archive code, third party), `proxy/`, one `build.bat` at the root that builds
   everything into `build/`, including the costume loader alone (`build/costumes_only/`) for the releases.
 
@@ -42,6 +46,16 @@
 - **Weapons show on the character select screen.** The slot's weapon list was loaded late: the first player to
   pick the outfit had no weapons there (Lily Kenyan Summer C2). Both of the scene's references now point at the
   slot's list.
+- **Parts a mod retextures without their material are shown.** A material of the outfit that the mod does not
+  ship, but that uses textures the mod ships, kept the game's textures: C. Viper Lace lingerie C2's head,
+  the hood of Lily Haruka Hoodie (her hair material uses the body's cloth), Oni Juri's eyes (shared `000/`
+  folder). The slot now gets its own copy of that material, bound to the mod's textures. The mod's files stay
+  out of the original outfit, which stays as the game made it.
+- **A mod's wind settings are used by its slot** (`weather/wind/.../*_chain_BattleSetting.chain`: Swimsuit
+  C. Viper, C. Viper Concept Outfit). The scene now follows every file the slot has under its own name.
+- **The DLC paks are read.** The game reads them over `re_chunk_000.pak`, for the players who own them: they
+  hold newer colour files of the Outfit 1 of JP, Dhalsim, Lily and Guile. The slots were built from the older
+  ones; they are now built from what the game reads, and buying or removing a DLC rebuilds them.
 
 ## 1.8.1 (2026-09-30)
 
