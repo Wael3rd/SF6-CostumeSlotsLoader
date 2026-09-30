@@ -6,6 +6,7 @@
 --
 -- Game thread only: the InputUp / InputDown hooks just count presses, every GUI write happens in
 -- LateUpdateBehavior. Texts are compared before being written (an identical set_Message crashes).
+-- With no stage mod installed the script does nothing: no hook, no per-frame callback.
 
 local REG_PATH   = "SF6_StageSlots_Data/registry.json"
 local STATE_PATH = "SF6_StageSlots_Data/state.json"
@@ -16,13 +17,35 @@ local STATE_PATH = "SF6_StageSlots_Data/state.json"
 
 local variants_of = {}                 -- stage id -> { {key, name, author, preview}, ... }
 do
-    local reg = json.load_file(REG_PATH)
+    local f = io.open(REG_PATH, "r")        -- missing file: no JSON error in the REFramework log
+    local reg = nil
+    if f then f:close(); reg = json.load_file(REG_PATH) end
     if reg and reg.stages then
         for _, st in ipairs(reg.stages) do
             if st.stage_id and st.variants and #st.variants > 0 then variants_of[st.stage_id] = st.variants end
         end
     end
 end
+
+local variant_count = 0
+for _, list in pairs(variants_of) do variant_count = variant_count + #list end
+local status = variant_count == 0 and "inactive: no stage mod in reframework/stage_mods"
+                                   or "not on the stage select screen"
+
+re.on_draw_ui(function()
+    if imgui.tree_node("SF6 Stage Slots") then
+        imgui.text(string.format("%d stage variant(s) installed", variant_count))
+        imgui.text(status)
+        imgui.tree_pop()
+    end
+end)
+
+-- No stage mod installed: no hook and no per-frame callback, a costume-only setup pays nothing
+if variant_count == 0 then
+    pcall(log.info, "[SF6_StageSlots] no stage variant installed: inactive (no hook, no frame callback)")
+    return
+end
+pcall(log.info, string.format("[SF6_StageSlots] %d stage variant(s) installed: active", variant_count))
 
 local state = json.load_file(STATE_PATH)
 if type(state) ~= "table" then state = {} end
@@ -54,7 +77,6 @@ local M_GET_TEXTURE = sdk.find_type_definition("via.gui.Texture"):get_method("ge
 local scr = { param = nil, agent_addr = nil, stage = nil, settle = 0, vanilla_name = {}, applied = {}, written = {} }
 local SETTLE_FRAMES = 3           -- after a focus change, the game rewrites the name and the image first
 local pending = 0                      -- UP / DOWN presses counted by the hooks, used next LateUpdate
-local status = "not on the stage select screen"
 
 local function current_scene()
     local sm = sdk.get_native_singleton("via.SceneManager")
@@ -69,20 +91,34 @@ local function find_stage_select()
     return comps:call("get_Item", 0):get_field("mStageSelect")
 end
 
--- The StageSelect agent while it is on screen, or nil
-local function stage_select_agent()
+-- The UI agents this script looks at (StageSelect, VSInfoOffline) are looked for again only when
+-- the agent list changes (its size or its last entry): the list is steady during a battle, so a
+-- battle costs a few reads per frame and no search.
+local agents = { sig = nil, stage = nil, vs = nil }
+
+local function refresh_agents()
     local mgr = sdk.get_managed_singleton("app.UIAgentManager")
     local list = mgr and mgr:get_field("_Entries")
-    if not list then return nil end
-    for i = 0, list:call("get_Count") - 1 do
+    if not list then agents.sig, agents.stage, agents.vs = nil, nil, nil; return end
+    local n = list:call("get_Count")
+    local last = n > 0 and list:call("get_Item", n - 1).Agent
+    local sig = n .. ":" .. (last and last:get_address() or 0)
+    if sig == agents.sig and (not agents.stage or sdk.is_managed_object(agents.stage))
+       and (not agents.vs or sdk.is_managed_object(agents.vs)) then return end
+    agents.sig, agents.stage, agents.vs = sig, nil, nil
+    for i = 0, n - 1 do
         local agent = list:call("get_Item", i).Agent
         local go = agent and agent:call("get_GameObject")
-        if go and go:call("get_Name") == "StageSelect" then
-            local cm = agent:call("get_ControlMain")
-            if cm and cm:call("get_ActualVisible") then return agent end
-            return nil
-        end
+        local name = go and go:call("get_Name")
+        if name == "StageSelect" then agents.stage = agent
+        elseif name == "VSInfoOffline" then agents.vs = agent end
     end
+end
+
+-- The agent's main control while the agent is on screen, or nil
+local function shown(agent)
+    local cm = agent and agent:call("get_ControlMain")
+    if cm and cm:call("get_ActualVisible") then return cm end
     return nil
 end
 
@@ -248,27 +284,13 @@ local function find_child(ctrl, name, depth)
     return nil
 end
 
-local function visible_agent(agent_name)
-    local mgr = sdk.get_managed_singleton("app.UIAgentManager")
-    local list = mgr and mgr:get_field("_Entries")
-    if not list then return nil end
-    for i = 0, list:call("get_Count") - 1 do
-        local agent = list:call("get_Item", i).Agent
-        local go = agent and agent:call("get_GameObject")
-        if go and go:call("get_Name") == agent_name then
-            local cm = agent:call("get_ControlMain")
-            if cm and cm:call("get_ActualVisible") then return agent, cm end
-        end
-    end
-    return nil
-end
-
 local function vs_screen()
     local stage = scr.decided
     local idx = stage and selected_index(stage) or 0
     if idx == 0 then return end
-    local agent, cm = visible_agent("VSInfoOffline")
-    if not agent then vs.agent_addr = nil; return end
+    local agent = agents.vs
+    local cm = shown(agent)
+    if not cm then vs.agent_addr = nil; return end
     if vs.agent_addr ~= agent:get_address() then
         vs.agent_addr = agent:get_address()
         local bg = find_child(cm, "c_bg", 0)
@@ -282,7 +304,8 @@ end
 
 local function on_late_update()
     frame_no = frame_no + 1
-    local agent = stage_select_agent()
+    refresh_agents()
+    local agent = shown(agents.stage) and agents.stage
     if not agent then
         vs_screen()
         if scr.param then status = "not on the stage select screen" end
@@ -348,12 +371,3 @@ end
 hook_direction("InputUp", -1)
 hook_direction("InputDown", 1)
 
-re.on_draw_ui(function()
-    if imgui.tree_node("SF6 Stage Slots") then
-        local n = 0
-        for _, list in pairs(variants_of) do n = n + #list end
-        imgui.text(string.format("%d stage variant(s) installed", n))
-        imgui.text(status)
-        imgui.tree_pop()
-    end
-end)
