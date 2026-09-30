@@ -23,6 +23,7 @@ struct StageVariant {
     std::string ess;            // stage code, ess0000_00
     std::string name;
     std::string author;
+    std::string bundle;         // Fluffy bundle name (nameAsBundle), may be empty
     std::string source;         // where it came from, relative to stage_mods
     bool has_preview = false;
     std::vector<std::pair<uint64_t, uint64_t>> redirects;   // vanilla hash -> hash in our pak

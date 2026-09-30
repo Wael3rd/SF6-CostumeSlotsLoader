@@ -24,7 +24,7 @@ namespace {
 const char* STAGE_MARKER = "natives/stm/sf6_stage_slots.marker";
 const char* COSTUME_MARKER = "natives/stm/sf6_costume_slots.marker";
 // Part of the fingerprint: bump it when the pak layout or the preview conversion changes.
-const char* FORMAT_VERSION = "stageslots-2";
+const char* FORMAT_VERSION = "stageslots-3";
 const char* TEX_SUFFIX = ".tex.241101895";
 
 // ---------------------------------------------------------------------------------------------
@@ -50,13 +50,22 @@ std::string hex16(uint64_t v) {
     return b;
 }
 
+// Mod trees go deep (natives\stm\product\environment\props\resource\sm0x\...): under the archive
+// cache their paths pass MAX_PATH, so file calls take the \\?\ form of long absolute paths.
+std::wstring lp(const std::wstring& p) {
+    if (p.size() < MAX_PATH - 12 || p.compare(0, 4, L"\\\\?\\") == 0 || p.size() < 3 || p[1] != L':') return p;
+    std::wstring q = L"\\\\?\\" + p;
+    for (auto& c : q) if (c == L'/') c = L'\\';
+    return q;
+}
+
 bool file_exists(const std::wstring& p) {
-    DWORD a = GetFileAttributesW(p.c_str());
+    DWORD a = GetFileAttributesW(lp(p).c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 bool dir_exists(const std::wstring& p) {
-    DWORD a = GetFileAttributesW(p.c_str());
+    DWORD a = GetFileAttributesW(lp(p).c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
@@ -72,7 +81,7 @@ std::wstring stem(const std::wstring& name) {
 
 bool read_file(const std::wstring& p, std::vector<uint8_t>& out) {
     FILE* f = nullptr;
-    if (_wfopen_s(&f, p.c_str(), L"rb") != 0 || !f) return false;
+    if (_wfopen_s(&f, lp(p).c_str(), L"rb") != 0 || !f) return false;
     _fseeki64(f, 0, SEEK_END);
     long long n = _ftelli64(f);
     _fseeki64(f, 0, SEEK_SET);
@@ -97,7 +106,7 @@ struct DirEntry { std::wstring name; bool dir; uint64_t size; uint64_t mtime; };
 std::vector<DirEntry> list_dir(const std::wstring& dir) {
     std::vector<DirEntry> out;
     WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    HANDLE h = FindFirstFileW(lp(dir + L"\\*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return out;
     do {
         if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
@@ -252,7 +261,7 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
 
 struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; };
 struct Option {
-    std::string name, author, rel;
+    std::string name, author, bundle, rel;     // bundle: Fluffy's nameAsBundle
     std::wstring screenshot;
     std::vector<OptFile> files;
 };
@@ -266,7 +275,8 @@ bool archive_keep(const std::wstring& entry) {
     return l.find(L"natives/") != std::wstring::npos || ends_with(l, L".pak") || ends_with(l, L".ini") || is_image(l);
 }
 
-void read_modinfo(const std::wstring& dir, std::string& name, std::string& author, std::wstring& screenshot) {
+void read_modinfo(const std::wstring& dir, std::string& name, std::string& author, std::string& bundle,
+                  std::wstring& screenshot) {
     std::vector<uint8_t> data;
     if (!read_file(dir + L"\\modinfo.ini", data)) return;
     std::string text(data.begin(), data.end());
@@ -285,6 +295,7 @@ void read_modinfo(const std::wstring& dir, std::string& name, std::string& autho
         while (!v.empty() && v.front() == ' ') v.erase(0, 1);
         if (k == "name" && !v.empty()) name = v;
         else if (k == "author") author = v;
+        else if (k == "nameasbundle") bundle = v;
         else if (k == "screenshot" && !v.empty()) screenshot = dir + L"\\" + widen(v);
     }
 }
@@ -305,7 +316,7 @@ void add_natives(const std::wstring& dir, const std::string& rel, Option& opt) {
 
 void add_pak(const std::wstring& path, Option& opt) {
     FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) { slog("  cannot open %s", narrow(path).c_str()); return; }
+    if (_wfopen_s(&f, lp(path).c_str(), L"rb") != 0 || !f) { slog("  cannot open %s", narrow(path).c_str()); return; }
     std::vector<KpkaEntry> idx;
     if (!kpka_index(f, idx)) { slog("  not a readable pak: %s", narrow(path).c_str()); fclose(f); return; }
     for (auto& k : idx) {
@@ -336,7 +347,7 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
     if (has_pak || has_natives) {
         Option opt;
         opt.rel = rel;
-        read_modinfo(dir, opt.name, opt.author, opt.screenshot);
+        read_modinfo(dir, opt.name, opt.author, opt.bundle, opt.screenshot);
         if (opt.name.empty()) opt.name = is_root ? default_name : narrow(leaf(dir));
         if (!opt.screenshot.empty() && !file_exists(opt.screenshot)) opt.screenshot.clear();
         for (auto& e : entries) {
@@ -441,6 +452,7 @@ bool load_table(const std::wstring& path, std::string& fingerprint, std::vector<
             v.name = f[5];
             v.author = f[6];
             v.source = f[7];
+            if (f.size() >= 9) v.bundle = f[8];
             by_key[v.key] = out.size();
             out.push_back(v);
         } else if (f[0] == "R" && f.size() >= 4) {
@@ -456,7 +468,7 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
     std::string tsv = "#fingerprint\t" + fingerprint + "\n";
     for (auto& v : vars) {
         tsv += "V\t" + v.key + "\t" + std::to_string(v.stage_id) + "\t" + v.ess + "\t" + (v.has_preview ? "1" : "0") + "\t" +
-               tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\n";
+               tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" + tsv_clean(v.bundle) + "\n";
         for (auto& r : v.redirects) tsv += "R\t" + v.key + "\t" + hex16(r.first) + "\t" + hex16(r.second) + "\n";
     }
     std::map<uint32_t, std::vector<const StageVariant*>> by_stage;
@@ -471,7 +483,7 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
             auto* v = list[i];
             js += i ? ",\n" : "\n";
             js += "      { \"key\": \"" + v->key + "\", \"name\": \"" + json_escape(v->name) + "\", \"author\": \"" +
-                  json_escape(v->author) + "\", \"source\": \"" + json_escape(v->source) + "\", \"preview\": \"" +
+                  json_escape(v->author) + "\", \"bundle\": \"" + json_escape(v->bundle) + "\", \"source\": \"" + json_escape(v->source) + "\", \"preview\": \"" +
                   (v->has_preview ? stage_preview_resource(v->key) : std::string()) + "\", \"files\": " +
                   std::to_string(v->redirects.size()) + " }";
         }
@@ -575,6 +587,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
             v.stage_id = stage_id_of(ess);
             v.name = by_ess.size() > 1 ? opt.name + " (" + ess + ")" : opt.name;
             v.author = opt.author;
+            v.bundle = opt.bundle;
             v.source = opt.rel;
             v.key = "s" + hex16(fnv64(opt.rel + "|" + ess)).substr(0, 12);
             std::vector<size_t> all = idx;
@@ -588,7 +601,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
             if (!opt.screenshot.empty()) {
                 std::vector<uint8_t> tex;
                 std::string err;
-                if (make_stage_preview_tex(opt.screenshot, tex, err)) {
+                if (make_stage_preview_tex(lp(opt.screenshot), tex, err)) {
                     std::string p = "natives/stm/_stageslots/" + v.key + "/preview" + TEX_SUFFIX;
                     writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(tex));
                     v.has_preview = true;

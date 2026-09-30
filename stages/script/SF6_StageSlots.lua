@@ -51,7 +51,7 @@ end
 local T_FLOW = sdk.typeof("app.battle.bBattleStageSelectFlow")
 local M_GET_TEXTURE = sdk.find_type_definition("via.gui.Texture"):get_method("getTexture")
 
-local scr = { param = nil, agent_addr = nil, stage = nil, settle = 0, vanilla_name = {}, applied = {} }
+local scr = { param = nil, agent_addr = nil, stage = nil, settle = 0, vanilla_name = {}, applied = {}, written = {} }
 local SETTLE_FRAMES = 3           -- after a focus change, the game rewrites the name and the image first
 local pending = 0                      -- UP / DOWN presses counted by the hooks, used next LateUpdate
 local status = "not on the stage select screen"
@@ -154,9 +154,17 @@ end
 -- The game's own name of a stage: read once the game has written it, never one of ours
 local function learn_vanilla_name(text0, stage)
     local cur = text0:call("get_Message")
-    if not cur or cur == "" then return end
-    for _, v in ipairs(variants_of[stage] or {}) do if v.name == cur then return end end
+    if not cur or cur == "" or cur == scr.written[stage] then return end
     scr.vanilla_name[stage] = cur
+end
+
+-- A variant named like the stage itself (a lighting pack: "Bather's Beach") shows its bundle
+-- name instead, so it cannot be mistaken for the vanilla stage.
+local function norm(s) return (s or ""):lower():gsub("^%s+", ""):gsub("%s+$", "") end
+local function display_name(stage, v)
+    local vn = scr.vanilla_name[stage]
+    if vn and v.bundle and v.bundle ~= "" and norm(v.name) == norm(vn) then return v.bundle end
+    return v.name
 end
 
 -- Shows the selected variant of the focused stage (or puts the game's own name/image back)
@@ -167,6 +175,7 @@ local function apply(param, stage)
     if idx == 0 then
         if scr.applied[stage] then
             if scr.vanilla_name[stage] then set_text(text0, scr.vanilla_name[stage]) end
+            scr.written[stage] = nil
             set_texture(tex0, vanilla_holder(param, stage))
             scr.applied[stage] = nil
         end
@@ -175,7 +184,9 @@ local function apply(param, stage)
     end
     if not scr.applied[stage] then learn_vanilla_name(text0, stage) end
     local v = variants_of[stage][idx]
-    set_text(text0, v.name)
+    local name = display_name(stage, v)
+    set_text(text0, name)
+    scr.written[stage] = name
     if v.preview and v.preview ~= "" then set_texture(tex0, preview_holder(v.preview))
     else set_texture(tex0, vanilla_holder(param, stage)) end
     scr.applied[stage] = v.key
@@ -187,7 +198,7 @@ local function on_late_update()
     if not agent then
         if scr.param then status = "not on the stage select screen" end
         scr.param, scr.agent_addr, scr.stage = nil, nil, nil
-        scr.applied = {}
+        scr.applied, scr.written = {}, {}
         pending = 0
         return
     end
@@ -201,7 +212,7 @@ local function on_late_update()
     if stage == nil then return end
     if stage ~= scr.stage then
         scr.stage = stage
-        scr.applied[stage] = nil          -- the game rewrites the name and the image for this stage
+        scr.applied[stage], scr.written[stage] = nil, nil   -- the game rewrites the name and the image
         scr.settle = SETTLE_FRAMES
         preload_previews(stage)
     end
