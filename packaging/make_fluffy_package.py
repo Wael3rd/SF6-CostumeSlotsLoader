@@ -1,24 +1,24 @@
-# NOTE: this script is kept as reference. It expects the layout of a live installation
-# (game root / reframework / ...) and picks up the built DLLs and the generated data files
-# from there, none of which live in this repository.
+# The built files come from this repository (build.bat first: build/costumes_only/amd_ags_x64.dll,
+# build/SF6_CostumeSlotsNative.dll), the generated data files and the genuine AMD library from a
+# live installation (--game), since neither lives in this repository.
 """Assemble le zip Fluffy du mod de base "SF6 Costume Slots Loader".
 
 Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
-  amd_ags_x64.dll                       proxy AGS + loader (SF6_CostumeLoader/amd_ags_x64.dll)
+  amd_ags_x64.dll                       proxy AGS + loader costumes seul (build/costumes_only/amd_ags_x64.dll)
   amd_ags_x64_real.dll                  la vraie bibliotheque AMD AGS du jeu (MIT), que le proxy relaie
   reframework/autorun/SF6_CostumeSlots.lua
   reframework/plugins/SF6_CostumeSlotsNative.dll   (alias en match sur REFramework officiel)
   reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv
   reframework/data/SF6_Costumes_Data/loader/static/*      (5 fichiers structurels + static_meta.json)
 
-Usage : python make_fluffy_package.py [--version 1.0] [--out "C:\\Users\\...\\Documents\\SF6_CostumeSlotsLoader_v1.0_FluffyMod.zip"]
+Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
 """
 import argparse, os, sys, zipfile, hashlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REF = os.path.dirname(HERE)                      # reframework/
-GAME = os.path.dirname(REF)                      # racine du jeu
+REPO = os.path.dirname(HERE)                     # racine du depot
+DEFAULT_GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Street Fighter 6"
 
 def sha(p):
     h = hashlib.sha256()
@@ -112,17 +112,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--game", default=DEFAULT_GAME)
     a = ap.parse_args()
+    GAME = a.game                                # racine du jeu
+    REF = os.path.join(GAME, "reframework")
     out = a.out or os.path.join(os.path.expanduser("~"), "Documents", "SF6_CostumeSlotsLoader_v%s_FluffyMod.zip" % a.version)
 
-    proxy = os.path.join(HERE, "amd_ags_x64.dll")
+    proxy = os.path.join(REPO, "build", "costumes_only", "amd_ags_x64.dll")
     real = None
     for cand in (os.path.join(GAME, "amd_ags_x64_real.dll"), os.path.join(REF, "_backup", "amd_ags_x64_real_orig_20260922.dll")):
         if os.path.exists(cand) and is_real_ags(cand): real = cand; break
     if real is None: sys.exit("vraie amd_ags_x64.dll introuvable")
-    if is_real_ags(proxy): sys.exit("SF6_CostumeLoader/amd_ags_x64.dll n'est pas le proxy (build.bat ?)")
-    lua = os.path.join(REF, "autorun", "SF6_CostumeSlots.lua")
-    plugin = os.path.join(REF, "plugins", "native", "costumeslots", "out", "SF6_CostumeSlotsNative.dll")
+    if not os.path.exists(proxy) or is_real_ags(proxy): sys.exit("build/costumes_only/amd_ags_x64.dll manquant ou pas le proxy (build.bat ?)")
+    lua = os.path.join(REPO, "costumes", "script", "SF6_CostumeSlots.lua")
+    plugin = os.path.join(REPO, "build", "SF6_CostumeSlotsNative.dll")
     loader_dir = os.path.join(REF, "data", "SF6_Costumes_Data", "loader")
     files = [
         (proxy, "amd_ags_x64.dll"),
@@ -132,7 +135,7 @@ def main():
         (os.path.join(loader_dir, "vanilla_costume_index.tsv"), "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv"),
     ]
     for n in ("SF6_CostumeAudit.bat", "SF6_CostumeAudit.ps1"):
-        files.append((os.path.join(HERE, "audit", n), "reframework/costume_mods/" + n))
+        files.append((os.path.join(REPO, "costumes", "audit", n), "reframework/costume_mods/" + n))
     for n in sorted(os.listdir(os.path.join(loader_dir, "static"))):
         if n.lower().endswith((".md",)): continue
         files.append((os.path.join(loader_dir, "static", n), "reframework/data/SF6_Costumes_Data/loader/static/" + n))

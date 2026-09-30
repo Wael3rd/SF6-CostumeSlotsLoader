@@ -37,11 +37,9 @@ colours in TableDataManager, SelectFighterUIData badges.
 
 ## Build
 
-```
-"C:\...\reframework\plugins\native\costumeslots\build.bat"
-```
+`build.bat` at the root of the repository builds it with the rest.
 
-Output: `out\SF6_CostumeSlotsNative.dll`. Copy into `reframework\plugins\`
+Output: `build\SF6_CostumeSlotsNative.dll`. Copy into `reframework\plugins\`
 **with the game closed**.
 
 ## Compatibility

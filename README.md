@@ -1,4 +1,16 @@
-# SF6 Costume Slots Loader
+# SF6 Slots Loader
+
+Street Fighter 6 mods replace what they change. This project keeps the original and the mods side by side,
+in one `amd_ags_x64.dll`:
+
+| Part | What it does | State |
+|---|---|---|
+| **Costume slots** (`costumes/`) | every costume mod becomes an extra outfit slot | released, this page |
+| **Stage slots** (`stages/`) | UP / DOWN on the stage select screen cycles a stage through its mods | in development, not in the releases yet: [stages/README.md](stages/README.md) |
+
+This repository was named SF6-CostumeSlotsLoader until 30/09/2026; the old links lead here.
+
+## Costume slots
 
 Street Fighter 6 costume mods replace an existing outfit: install a Ryu mod and Outfit 1 is gone until you
 uninstall it. This loader turns every installed costume mod into an **extra** outfit slot and puts the original
@@ -9,7 +21,7 @@ do, start the game, and the new outfits are there.
 
 ## Install
 
-Grab the archive from [Releases](https://github.com/Wael3rd/SF6-CostumeSlotsLoader/releases), install it in
+Grab the archive from [Releases](https://github.com/Wael3rd/SF6-SlotsLoader/releases), install it in
 Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
 REFramework in `dinput8.dll`, official build 1.5.8 or newer.
 
@@ -91,37 +103,46 @@ Lua scripts during online matches but not native plugins.
 ## Repository layout
 
 ```
-loader/       the loader itself: KPKA pak reader and writer, scene and material patching, AGS proxy
-plugin/       native REFramework plugin, used during online matches
-script/       Lua script, used in menus (slot selection, colours, ownership)
-tools/        generators for the data files, run against your own game installation
-audit/        SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
-packaging/    builds the distributable zip
+build.bat            builds everything into build/
+common/              shared by both loaders: KPKA pak reader and writer, archive reading, third party code
+proxy/               the AGS proxy: one DllMain for the stage and costume passes
+costumes/loader/     costume loader: mod detection, slot relocation, scene and material patching
+costumes/plugin/     native REFramework plugin, used during online matches
+costumes/script/     Lua script, used in menus (slot selection, colours, ownership)
+costumes/tools/      generators for the data files, run against your own game installation
+costumes/audit/      SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
+stages/              stage slots: loader pass, redirection, stage select script, tools, notes
+packaging/           builds the distributable zip
 ```
 
-The loader DLL has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash the
-mod fingerprint), and `advapi32` and `user32` for the archive decoders; the game has all four loaded already.
-Every AGS export is forwarded to `amd_ags_x64_real.dll`, the genuine AMD library that ships with the game.
+The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash
+the mod fingerprint), and `advapi32` and `user32` for the archive decoders; the game has all four loaded
+already. Every AGS export is forwarded to `amd_ags_x64_real.dll`, the genuine AMD library that ships with the
+game. The stage slots add one hook, described in [stages/README.md](stages/README.md); the releases ship the
+costume loader alone until they are ready.
 
 ## Building
 
-Visual Studio 2022 with the C++ toolchain, then:
+Visual Studio 2022 or Build Tools with the C++ workload, then `build.bat` at the root:
 
 ```
-loader\build.bat     produces amd_ags_x64.dll, costume_loader.exe, paktool.exe, loadtest.exe
-plugin\build.bat     produces SF6_CostumeSlotsNative.dll
+build\amd_ags_x64.dll                  costume slots + stage slots
+build\costumes_only\amd_ags_x64.dll    costume slots alone (the releases)
+build\SF6_CostumeSlotsNative.dll       REFramework plugin
+build\costume_loader.exe, paktool.exe, loadtest.exe, stagepak.exe, stagetest.exe, textest.exe
 ```
 
-Both are compiled with `/MT` and `/EHa`. Structured exception handling must not be disabled: the loader runs
-inside `DllMain` and swallows any fault rather than taking the game down with it.
+`build.bat deps` also rebuilds the archive decoders. Everything is compiled with `/MT` and `/EHa`. Structured
+exception handling must not be disabled: the loaders run inside `DllMain` and swallow any fault rather than
+taking the game down with it.
 
 ## Data files
 
 The loader needs two data files that are **derived from your own copy of the game** and are deliberately not
 distributed here:
 
-- `vanilla_costume_index.tsv`, an index of the original costume files, built by `tools/build_vanilla_inventory.py`.
-- the static structural tables that declare the extra slots, built by `tools/make_static_structural.py`.
+- `vanilla_costume_index.tsv`, an index of the original costume files, built by `costumes/tools/build_vanilla_inventory.py`.
+- the static structural tables that declare the extra slots, built by `costumes/tools/make_static_structural.py`.
 
 Both scripts read the game paks through [REasy-parser](https://github.com/seifhassine/REasy). Point the
 `REASY_PARSER` environment variable at your checkout before running them.
@@ -141,8 +162,9 @@ REFramework in `dinput8.dll`, official build 1.5.8 or newer.
 
 Written by Wael. Released under the MIT licence, see `LICENSE`.
 
-Third party code is vendored under `loader/third_party/` and `plugin/include/`: the zstd decompressor, miniz,
-the LZMA SDK 7z decoder, UnRAR and the REFramework plugin API. See `THIRD_PARTY.md` for their licences.
+Third party code is vendored under `common/third_party/`, `costumes/plugin/include/` and
+`stages/loader/third_party/`: the zstd decompressor, miniz, bcdec, the LZMA SDK 7z decoder, UnRAR, the
+REFramework plugin API and the stb image libraries. See `THIRD_PARTY.md` for their licences.
 
 This repository ships no game data: the tables the loader needs are generated from your own installation,
 and the release archive carries a prebuilt copy of them. Street Fighter 6 is a trademark of Capcom.

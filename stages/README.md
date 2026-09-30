@@ -11,14 +11,15 @@ their own, and served in place of the original files only while that mod is sele
 
 ## Install and use
 
-Stage Slots ships inside the costume loader's `amd_ags_x64.dll` (one DLL for both, see *How it works*),
-plus a Lua script. You need REFramework in `dinput8.dll`.
+Stage Slots is part of [SF6 Slots Loader](../README.md): it ships in the same `amd_ags_x64.dll` as the
+costume slots (`build\amd_ags_x64.dll`, see *How it works*), plus a Lua script. It is not in the releases yet.
+You need REFramework in `dinput8.dll`.
 
 | File | Where |
 |---|---|
-| `amd_ags_x64.dll` (costume loader + stage slots) | game folder |
-| `script/SF6_StageSlots.lua` | `reframework/autorun/` |
-| `data/loader/stage_paths.txt` | `reframework/data/SF6_StageSlots_Data/loader/` |
+| `build/amd_ags_x64.dll` (costume slots + stage slots) | game folder |
+| `stages/script/SF6_StageSlots.lua` | `reframework/autorun/` |
+| `stages/data/loader/stage_paths.txt` | `reframework/data/SF6_StageSlots_Data/loader/` |
 
 Put stage mods **as downloaded** in `reframework/stage_mods/`: the `.zip`, `.7z` or `.rar` file itself, a
 folder with a `natives` tree, or a `.pak`. Launch the game.
@@ -42,31 +43,31 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   of the stage. The redirection is native and stays active online; online play has not been tested.
 - **Stage mods installed through Fluffy Mod Manager are not variants yet**: their pak replaces the stage for
   everyone, the loader does not restore the original under it.
-- **Adding or removing a stage mod makes the costume loader rebuild its pak once** (about 50 s with many
-  costume mods), because the stage pak sits below it in the patch order.
 - A mod that hangs the game on its own hangs it here too (seen: *Aokigahara - no NPC* stays on the VS screen,
   also when installed as a plain Fluffy pak).
 
 ## How it works
 
-The game imports `amd_ags_x64.dll` from its own folder, before any engine code runs. The DLL is the costume
-loader's proxy, built from its sources unchanged, with the stage slots around it:
+The game imports `amd_ags_x64.dll` from its own folder, before any engine code runs. Its `DllMain`
+(`proxy/slots_proxy.cpp`) runs the stage slots around the costume loader:
 
-1. **Stage pass** (`loader/stage_loader.cpp`, DllMain). Reads `reframework/stage_mods`, unpacks archives once
+1. **Stage pass** (`stages/loader/stage_loader.cpp`, DllMain). Reads `reframework/stage_mods`, unpacks archives once
    into `stage_mods/.cache`, and recognises the stage of every file with `stage_paths.txt` (every game path
    holding a stage code `essNNNN_NN`, hashed at startup). Each file of a variant is stored in our patch pak
    under `pak_path_hash("natives/stm/_stageslots/<variant>/<vanilla hash>")`, next to its preview texture.
    The stage pak goes right above the mod paks and below the costume pak (marker
    `natives/stm/sf6_stage_slots.marker`). Nothing changed since last launch: the saved table is reused
    (a few ms).
-2. **Costume pass**, unchanged.
-3. **Redirection** (`loader/stage_redirect.cpp`). The engine turns every file path into a pak hash through one
+2. **Costume pass** (`costumes/`). It recognises the stage pak by its marker and leaves it out of its scan
+   and of its fingerprint, so adding or removing a stage mod does not rebuild the costume pak; its own pak
+   stays above the stage pak (moved, not rebuilt, when the stage pak comes or goes).
+3. **Redirection** (`stages/loader/stage_redirect.cpp`). The engine turns every file path into a pak hash through one
    function, `path_to_hash`. A small block of memory is reserved near the executable at startup; once a
    variant is selected (and never in the first 20 s), the entry of `path_to_hash` gets a 5-byte jump to our
    detour, which swaps the hash of each vanilla file the selected variant replaces for its copy's hash. A
    tool that hooked the function first (HARD READ) stays in the chain. The selection is re-read from
    `state.json` when it changes.
-4. **Lua script** (`script/SF6_StageSlots.lua`). Counts UP / DOWN on the stage select agent, writes
+4. **Lua script** (`stages/script/SF6_StageSlots.lua`). Counts UP / DOWN on the stage select agent, writes
    `state.json`, and shows the variant: name and preview on the stage select screen, name and image on the
    VS screen. Game thread only (`LateUpdateBehavior`), no text written twice.
 
@@ -76,22 +77,23 @@ Outputs, in `reframework/data/SF6_StageSlots_Data`: `registry.json` (variants pe
 
 ## Building
 
-Visual Studio 2022 or Build Tools with the C++ workload. The costume loader's sources and its
-`archive_deps.lib` are needed (`COSTUME_SRC`, by default the development copy in
-`reframework/SF6_CostumeLoader`).
+`build.bat` at the root of the repository (Visual Studio 2022 or Build Tools with the C++ workload) builds
+both loaders and the tools into `build/`:
 
 ```
-loader\build.bat        build\amd_ags_x64.dll
-tools\build_tools.bat   build\stagepak.exe, textest.exe, stagetest.exe
+build\amd_ags_x64.dll   costume slots + stage slots
+build\stagepak.exe, stagetest.exe, textest.exe
 ```
 
 - `stagetest <folder>` runs the stage pass on a folder laid out like the game's (no game needed).
 - `textest <image> <out.tex>` makes a preview; `textest --dump <in.tex> <out.png>` decodes one.
-- `tools/make_stage_index.py` rebuilds `data/loader/stage_paths.txt` from REasy-parser's `SF6_STM.list`.
+- `stages/tools/make_stage_index.py` rebuilds `stages/data/loader/stage_paths.txt` from REasy-parser's
+  `SF6_STM.list` (point `REASY_PARSER` at your checkout).
 
 Development notes (engine facts, test status, open items): [docs/DEV_NOTES.md](docs/DEV_NOTES.md).
 
 ## Third party
 
-`loader/third_party`: stb_image, stb_image_write, stb_dxt (public domain), bcdec (MIT, test tool only). The
-costume loader's pak, archive and decompression code is compiled from its own repository.
+`stages/loader/third_party`: stb_image, stb_image_write, stb_dxt (public domain or MIT). bcdec (MIT, used by
+`textest` only) and the pak, archive and decompression code come from `common/`. See
+[THIRD_PARTY.md](../THIRD_PARTY.md).

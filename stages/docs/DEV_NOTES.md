@@ -25,11 +25,12 @@ redirection. It shares its bridge and World Tour props (`wtc0202`) with the NPC 
 
 1. Stage mods installed through Fluffy (their paks in the patch chain): read them as variants and restore the
    vanilla files under them.
-2. The costume loader fingerprints every mod pak below its own, the stage pak included: any change of stage
-   mods rebuilds the costume pak (about 50 s). It should skip paks carrying the stage marker.
+2. Done 30/09: the costume loader leaves the pak carrying the stage marker out of its scan and fingerprint
+   (a change of stage mods no longer rebuilds the costume pak) and moves its own pak when only the stage
+   pak's presence changed.
 3. Trace the Aokigahara (no NPC) hang (`debug.txt` in `SF6_StageSlots_Data` with `trace=<text>` logs every
    hashed path holding the text).
-4. Private GitHub repository.
+4. Done 30/09: merged into SF6-SlotsLoader (formerly SF6-CostumeSlotsLoader), under `stages/`, history kept.
 5. Optional: preview framing (a 4:1 band of a 16:9 screenshot looks zoomed next to the game's own key art;
    blurred side fill was proposed, not wanted for now).
 

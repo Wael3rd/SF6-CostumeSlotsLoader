@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Repository
+- **Renamed SF6-SlotsLoader** (was SF6-CostumeSlotsLoader; the old links lead here). It now also holds the
+  stage slots (`stages/`): on the stage select screen, UP / DOWN cycles a stage through its mods. They ship in
+  the same `amd_ags_x64.dll`, are in development and are not in the releases yet. Layout: `costumes/`,
+  `stages/`, `common/` (pak and archive code, third party), `proxy/`, one `build.bat` at the root that builds
+  everything into `build/`, including the costume loader alone (`build/costumes_only/`) for the releases.
+
+### Fixed
+- **The stage slots' pak is not taken for a mod pak.** It sits right below the costume pak; adding or removing
+  a stage mod rebuilt the costume pak (about 50 s with many mods). It is now recognised by its marker and left
+  out, the costume pak stays above it, and when only its presence changed the costume pak is moved instead of
+  rebuilt.
+
 ## 1.8.1 (2026-09-30)
 
 Found by testing with a large set of Cammy, C. Viper and Ingrid mods installed together.
