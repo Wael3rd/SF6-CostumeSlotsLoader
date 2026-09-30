@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-29-donor2";
+static const char* LOADER_BUILD_ID = "2026-09-30-addonparts2";
 
 // ============================================================================
 // Utility
@@ -762,22 +762,54 @@ struct ModFileRef {
     }
 };
 
+// A file directly in product/model/ (no sub-folder): the game keeps none there, so a mod that ships one
+// (Dance Outfit for Cammy: model/1.tex, named by its materials) adds a file, overrides nothing
+static bool is_model_root_file(const std::string& low) {
+    static const std::string pfx = "natives/stm/product/model/";
+    return low.compare(0, pfx.size(), pfx) == 0 && low.find('/', pfx.size()) == std::string::npos;
+}
+
+// Where a mod file comes from: the folder holding its natives tree (an option of an archive is a folder of
+// its own), or the pak that holds it. A slot may take from other mods the files it lacks only if they come
+// from its own mod: another mod's colour file under the same name has other colours (Escape from Shadaloo
+// and Dance Outfit for Cammy showed B Style Bunny's colours, whichever mod happened to be loaded last).
+static std::string mod_root(const ModFileRef& f) {
+    if (f.is_disk()) {
+        std::string low = f.disk_path;
+        for (auto& ch : low) ch = (char)tolower((unsigned char)ch);
+        auto n = low.find("\\natives\\");
+        return n == std::string::npos ? low : low.substr(0, n);
+    }
+    char buf[32]; snprintf(buf, sizeof buf, "pak %p", (const void*)f.pak);
+    return buf;
+}
+
+using ModFileMaps = std::vector<const std::unordered_map<std::string, ModFileRef>*>;
+
 // Write the streaming twin of a relocated texture if it exists in mod files or base pak
 static int write_streaming_twin(PakWriter& writer,
                                 std::unordered_set<std::string>& written,
                                 const std::string& orig_path,
                                 const std::string& new_path,
                                 const std::unordered_map<std::string, ModFileRef>& all_mod,
-                                PakReader& base_pak) {
+                                PakReader& base_pak,
+                                const ModFileMaps* own = nullptr) {
     if (str_lower(orig_path).find(".tex.") == std::string::npos) return 0;
     size_t bp = strlen(BASE_PFX);
     if (orig_path.size() <= bp || orig_path.compare(0, bp, BASE_PFX) != 0) return 0;
     std::string s_orig = std::string(STREAM_PFX) + orig_path.substr(bp);
     std::string s_new  = std::string(STREAM_PFX) + new_path.substr(bp);
     if (written.count(s_new)) return 0;
-    auto mit = all_mod.find(s_orig);
-    if (mit != all_mod.end()) {
-        auto data = mit->second.read_data();
+    // The high-resolution twin of a mod's texture comes from that mod: several mods ship textures of the
+    // same name for the same outfit (Christie, Imperium, Zani, 2B, Alt Bare Legs all replace Cammy's
+    // esf009_001_01_clotha_*), and the twin of another mod is another picture (Bare Legs lost its jacket
+    // and glove colours). Without a twin of its own, the game's twin at that path is used, as when the
+    // mod is installed alone.
+    (void)all_mod;   // several mods can ship the same path and that map keeps the first: not a source
+    const ModFileRef* twin = nullptr;
+    if (own) for (auto* files : *own) { auto it = files->find(s_orig); if (it != files->end()) { twin = &it->second; break; } }
+    if (twin) {
+        auto data = twin->read_data();
         uint64_t h = pak_path_hash(std::string_view(s_new));
         writer.add_uncompressed(h, std::move(data));
         written.insert(s_new);
@@ -1052,6 +1084,9 @@ struct ModCostume {
     // Files of the same mod for other costume folders that give no outfit of their own (no body mesh):
     // parts made for an older layout of the game, used by donate_parts()
     std::unordered_map<std::string, ModFileRef> files_donor;
+    // Files of an add-on made for another outfit's folder, moved into this costume (path in the costume ->
+    // folder they were written for); their material files still name that folder
+    std::unordered_map<std::string, std::string> remapped;
 };
 
 // allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
@@ -1059,7 +1094,7 @@ struct ModCostume {
 // is required, since a partial option is usually an add-on of another option of the same mod.
 static std::vector<ModCostume> detect_mod_costumes(
     const std::unordered_map<std::string, ModFileRef>& mod_files,
-    const VanillaIndex& inv, bool allow_partial = false) {
+    const VanillaIndex& inv, bool allow_partial = false, bool remap_parts = false) {
 
     std::map<std::string, ModCostume> groups; // "fd\tfolder" -> MC
     std::unordered_map<std::string, ModFileRef> other_files;
@@ -1127,6 +1162,54 @@ static std::vector<ModCostume> detect_mod_costumes(
     // an entry of two files or less with no texture is not an outfit of its own.
     size_t biggest = 0;
     for (auto& [k, mc] : groups) biggest = std::max(biggest, mc.files_in_folder.size());
+    // An add-on published for another outfit than the costume it is used with (a hair made for Outfit 1,
+    // next to a costume of Outfit 2): its parts go where the costume has none of that number, in the
+    // costume's own folder and names. Only when the caller combined them on purpose (same sub-folder).
+    if (remap_parts && !allow_partial) {
+        auto has_body_of = [&](ModCostume& g) {
+            for (auto& [p, mf] : g.files_in_folder)
+                if (str_ends_with(str_lower(p), ".mesh.230110883")
+                    && p.find("/" + g.original_folder + "/01/") != std::string::npos) return true;
+            return false;
+        };
+        for (auto& [kb, body] : groups) {
+            if (!has_body_of(body)) continue;
+            for (auto& [kp, part] : groups) {
+                if (&part == &body || part.fighter_dir != body.fighter_dir || has_body_of(part)) continue;
+                const std::string gdir = "/" + part.fighter_dir + "/" + part.original_folder + "/";
+                const std::string fdir = "/" + body.fighter_dir + "/" + body.original_folder + "/";
+                std::set<std::string> parts_with_mesh;
+                for (auto& [p, mf] : part.files_in_folder) {
+                    auto at = p.find(gdir);
+                    if (at == std::string::npos || !str_ends_with(str_lower(p), ".mesh.230110883")) continue;
+                    parts_with_mesh.insert(p.substr(at + gdir.size(), p.find('/', at + gdir.size()) - at - gdir.size()));
+                }
+                for (auto& pn : parts_with_mesh) {
+                    bool body_has = false;
+                    for (auto& [p, mf] : body.files_in_folder)
+                        if (p.find(fdir + pn + "/") != std::string::npos) { body_has = true; break; }
+                    if (body_has) continue;
+                    int n = 0;
+                    for (auto& [p, mf] : part.files_in_folder) {
+                        auto at = p.find(gdir + pn + "/");
+                        if (at == std::string::npos) continue;
+                        std::string np = p;
+                        np.replace(at, gdir.size(), fdir);
+                        auto sl = np.rfind('/');
+                        const std::string pf = body.fighter_dir + "_" + part.original_folder + "_";
+                        if (np.compare(sl + 1, pf.size(), pf) == 0)
+                            np.replace(sl + 1, pf.size(), body.fighter_dir + "_" + body.original_folder + "_");
+                        body.files_in_folder[np] = mf;
+                        body.remapped[np] = part.original_folder;
+                        n++;
+                    }
+                    printf("  part %s of %s/%s moved into %s/%s (%d files): the costume has none\n", pn.c_str(),
+                           part.fighter_dir.c_str(), part.original_folder.c_str(), body.fighter_dir.c_str(),
+                           body.original_folder.c_str(), n);
+                }
+            }
+        }
+    }
     for (auto it = groups.begin(); it != groups.end(); ) {
         bool textures = false;
         for (auto& [p, mf] : it->second.files_in_folder)
@@ -1497,6 +1580,11 @@ static void add_slot_files(PakWriter& writer,
     const std::string& new_f = slot.new_folder;
     int count = 0, patched = 0;
 
+    std::set<std::string> own_roots;   // the mod (or options of the mod) this slot is made of
+    for (auto* files : {&mc->files_in_folder, &mc->files_shared, &mc->files_other, &mc->files_scene})
+        for (auto& [pth, mf] : *files) own_roots.insert(mod_root(mf));
+    const ModFileMaps own_files = {&mc->files_in_folder, &mc->files_other, &mc->files_shared};
+
     // Dir-only relocation helper (shared across phases)
     auto relocate_dir_only = [&](const std::string& p) -> std::string {
         std::string old_dir = fd + "/" + old_f + "/";
@@ -1559,8 +1647,41 @@ static void add_slot_files(PakWriter& writer,
         if (str_ends_with(low, ".mdf2.31")) {
             auto data = mf.read_data();
             auto vdata = std::vector<uint8_t>(data.begin(), data.end());
+            if (auto rm = mc->remapped.find(path); rm != mc->remapped.end()) {
+                // made for another outfit's folder: its texture references follow the file to this costume
+                // (only the textures the add-on ships; the others name the game's own files of that folder)
+                const std::string from = fd + "/" + rm->second + "/", to = fd + "/" + old_f + "/";
+                const std::string cdir = "/" + fd + "/" + old_f + "/";
+                std::unordered_set<std::string> shipped;
+                for (auto& [np, g] : mc->remapped) {
+                    auto at = np.find(cdir), dot = np.find(".tex.");
+                    if (at != std::string::npos && dot != std::string::npos) shipped.insert(np.substr(at + cdir.size(), dot + 4 - at - cdir.size()));
+                }
+                std::vector<uint8_t> f16, t16;
+                for (char c : from) { f16.push_back((uint8_t)c); f16.push_back(0); }
+                for (char c : to) { t16.push_back((uint8_t)c); t16.push_back(0); }
+                for (size_t k = 0; k + f16.size() <= vdata.size(); k += 2) {
+                    if (memcmp(vdata.data() + k, f16.data(), f16.size()) != 0) continue;
+                    std::string rest;
+                    for (size_t j = k + f16.size(); j + 1 < vdata.size() && (vdata[j] || vdata[j + 1]); j += 2) rest += (char)tolower(vdata[j]);
+                    if (shipped.count(rest)) memcpy(vdata.data() + k, t16.data(), t16.size());
+                }
+            }
             size_t n = patch_material(vdata);
             if (n > 0) patched++;
+            // A material file made for an older layout of the material (every material one parameter short
+            // of the game's) is rebuilt on the game's file for that part, keeping the mod's textures
+            if (!is_streaming) {
+                if (auto* ve = base_pak.find(pak_path_hash(std::string_view(path)))) {
+                    auto van = base_pak.read(*ve);
+                    std::vector<uint8_t> rebuilt; int rb = 0;
+                    if (modernize_mdf2(vdata, std::vector<uint8_t>(van.begin(), van.end()), rebuilt, &rb)) {
+                        vdata = std::move(rebuilt);
+                        printf("      material file %s made for an older layout: rebuilt on the game's, %d texture bindings kept from the mod\n",
+                               path.c_str(), rb);
+                    }
+                }
+            }
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
         } else if (needs_content_patch(path)) {
@@ -1581,7 +1702,7 @@ static void add_slot_files(PakWriter& writer,
     }
     // Streaming twins for relocated textures
     for (auto& [orig, np] : tex_pairs)
-        streaming_count += write_streaming_twin(writer, written_paths, orig, np, all_mod, base_pak);
+        streaming_count += write_streaming_twin(writer, written_paths, orig, np, all_mod, base_pak, &own_files);
 
     std::vector<std::string> relocated_vanilla_mdf2;   // vanilla materials relocated by phase 1b
     // ---- Phase 1b: vanilla mdf2 relocation for the parts the mod gives no material ----
@@ -1668,6 +1789,10 @@ static void add_slot_files(PakWriter& writer,
     // ---- Phase 2: CCVD + CMD + chain (dir-only relocation) ----
     std::string base_model = "natives/stm/product/model/esf/" + fd + "/" + old_f + "/";
     const auto& amf = all_mod;
+    auto from_own_mod = [&](const std::string& path) {
+        auto it = amf.find(path);
+        return it != amf.end() && own_roots.count(mod_root(it->second)) > 0;
+    };
 
     // 2a. CCVD: read, patch dir segment, write; keep patched data for 2b scan
     std::vector<uint8_t> ccvd_patched; // kept alive for CMD discovery
@@ -1679,7 +1804,7 @@ static void add_slot_files(PakWriter& writer,
             auto mfit = mc->files_in_folder.find(ccvd_orig);
             if (mfit != mc->files_in_folder.end())
                 ccvd_data = mfit->second.read_data();
-            else if (amf.count(ccvd_orig)) {
+            else if (from_own_mod(ccvd_orig)) {
                 ccvd_data = amf.at(ccvd_orig).read_data();
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(ccvd_orig));
@@ -1766,7 +1891,7 @@ static void add_slot_files(PakWriter& writer,
                 mfit->second.read_raw(raw, att, ds);
                 writer.add_raw(th, std::move(raw), att, ds);
                 written_paths.insert(cmd_target); count++;
-            } else if (amf.count(cmd_orig)) {
+            } else if (from_own_mod(cmd_orig)) {
                 std::vector<uint8_t> raw; int64_t att, ds;
                 amf.at(cmd_orig).read_raw(raw, att, ds);
                 writer.add_raw(th, std::move(raw), att, ds);
@@ -1925,7 +2050,7 @@ static void add_slot_files(PakWriter& writer,
             if (str_lower(sp).find(".tex.") == std::string::npos || sp.find("/000/") == std::string::npos)
                 continue;
             std::string sh_new = relocate_path(sp, fd, "000", new_f);
-            streaming_count += write_streaming_twin(writer, written_paths, sp, sh_new, all_mod, base_pak);
+            streaming_count += write_streaming_twin(writer, written_paths, sp, sh_new, all_mod, base_pak, &own_files);
         }
         printf("      relocated shared files from 000/ parts\n");
     }
@@ -2160,7 +2285,7 @@ static void add_restorations(PakWriter& writer,
                     }
                 }
             }
-        } else if (pak_path.find("/model/esf/") != std::string::npos
+        } else if ((pak_path.find("/model/esf/") != std::string::npos || is_model_root_file(pak_path))
                    && !g_relocated_mod_paths.count(pak_path)) {
             // Not in the game and not relocated by any slot: another slot may still reference it
             // at this path (in_relocated alone dropped files a slot of another mod needed).
@@ -2489,6 +2614,21 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
             }
             if (paired) continue;
         }
+        // A material that no material file of the outfit defines is a part hidden on purpose (the mod's
+        // reduced mesh: AoD replace Ingrid hides her face and hair with one): giving the original part
+        // back would show what the mod hides. It stays as the mod made it unless the mod's own shared
+        // part can replace it (Vegeta's head).
+        std::string undefined_everywhere;
+        {
+            std::vector<std::string> need, have;
+            auto mesh_now = c.gf.load(mesh_p);
+            if (why.find("materials of the mesh not in its material file") != std::string::npos && mesh_materials(mesh_now, need)) {
+                for (auto& other : refs)
+                    if (str_ends_with(other, (".mdf2." + mdf_suf).c_str())) mdf2_materials(c.gf.load(other), have);
+                for (auto& m : need)
+                    if (std::find(have.begin(), have.end(), m) == have.end()) undefined_everywhere += (undefined_everywhere.empty() ? "" : ", ") + m;
+            }
+        }
 
         // Candidates: the mod's shared 000/ part, then the original costume's part
         struct Cand { const char* label; std::vector<uint8_t> mesh, mdf; };
@@ -2515,6 +2655,7 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
                          c.gf.load(model_path(old_f, part, "_v00.mdf2." + mdf_suf))});
         bool fixed = false;
         for (auto& k : cands) {
+            if (!undefined_everywhere.empty() && std::string(k.label) == "the original costume's part") continue;
             if (!mdf_is_slot) k.mdf = c.gf.load(mdf_p);   // the scene keeps its material file
             if (!pair_problem(c, k.mesh, k.mdf).empty()) continue;
             put_file(*c.gf.writer, mesh_p, std::move(k.mesh));
@@ -2522,6 +2663,19 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
             printf("      check: part %s (%s) rebuilt from %s\n", part.c_str(), why.c_str(), k.label);
             fixed = true;
             break;
+        }
+        if (!fixed && !undefined_everywhere.empty()) {
+            printf("      check: part %s kept as the mod made it (%s defined by no material file of the outfit)\n",
+                   part.c_str(), undefined_everywhere.c_str());
+            continue;
+        }
+        // A material the mesh names that no file defines is not refused: mods hide a part with such a
+        // mesh on purpose (AoD replace Ingrid, Changli for Mai), and they work without the loader and in
+        // 1.5, which did no check (a stall in this family was the textures, not the material). Kept as
+        // the mod made it, and said in the log.
+        if (!fixed && why.find("materials of the mesh not in its material file") != std::string::npos) {
+            printf("      check: part %s kept as the mod made it (%s)\n", part.c_str(), why.c_str());
+            continue;
         }
         if (!fixed) return "part " + part + ": " + why;
     }
@@ -2851,6 +3005,7 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
             for (auto& pfx : costume_prefixes) {
                 if (fn.find(pfx) != std::string::npos) { matched = true; break; }
             }
+            if (!matched && is_model_root_file(item.pak_path)) matched = true;
             if (matched) {
                 ModFileRef mf; mf.disk_path = item.full_path;
                 result[item.pak_path] = mf;
@@ -3277,6 +3432,22 @@ static bool unit_has_mesh(const UnitFiles& u) {
     return false;
 }
 
+// Two mods the user put in one sub-folder of a character on purpose: "<Char>/<Sub-folder>/<archive or folder>"
+// for both, the sub-folder being neither an archive nor a pak (the options of one archive share an archive
+// name instead)
+static bool user_grouped(const UnitFiles& a, const UnitFiles& b) {
+    auto split = [](const std::string& rel) {
+        std::vector<std::string> parts; size_t x = 0;
+        while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
+        return parts;
+    };
+    auto pa = split(a.u.rel), pb = split(b.u.rel);
+    if (pa.size() < 3 || pb.size() < 3) return false;
+    if (str_lower(pa[0]) != str_lower(pb[0]) || str_lower(pa[1]) != str_lower(pb[1])) return false;
+    if (is_archive_name(pa[1]) || str_ends_with(str_lower(pa[1]), ".pak")) return false;
+    return str_lower(pa[2]) != str_lower(pb[2]);
+}
+
 static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
     for (auto& [p, mf] : a.files) if (b.files.count(p)) return true;
     return false;
@@ -3296,7 +3467,7 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     char idb[24];
     snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
     printf("\n  variant: %s\n", label.c_str());
-    auto costumes = detect_mod_costumes(merged, o.inv);
+    auto costumes = detect_mod_costumes(merged, o.inv, false, true);
     print_costumes(costumes);
     if (costumes.empty()) return;
     printf("    mod_id: %s\n", idb);
@@ -3432,7 +3603,7 @@ static void finalize_units(ScanOutputs& o) {
         const auto& a = g_units[i];
         if (!a.costumes.empty() || a.files.empty() || modular.count(i)) continue;
         std::vector<size_t> bases;
-        for (int rule = 0; rule < 3 && bases.empty(); ++rule) {
+        for (int rule = 0; rule < 4 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
                 if (b.costumes.empty() || modular.count(j)) continue;
@@ -3440,6 +3611,8 @@ static void finalize_units(ScanOutputs& o) {
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
                 if (rule == 2) hit = a.source == b.source && shares_target(a, b);
+                // Same sub-folder, another outfit's folder: a partial add-on brings a part the costume lacks
+                if (rule == 3) hit = a.source == b.source && !shares_target(a, b) && b.costumes.size() == 1;
                 if (hit) bases.push_back(j);
             }
         }
@@ -3463,6 +3636,15 @@ static void finalize_units(ScanOutputs& o) {
 
     for (auto& [j, adds] : addons_of) {
         const auto& b = g_units[j];
+        // An add-on put with its costume in one sub-folder is meant for that costume: only the combined
+        // outfit is made, not the costume alone as well
+        bool grouped = false;
+        for (auto a : adds) if (user_grouped(g_units[a], b)) grouped = true;
+        if (grouped) {
+            o.mods_out.erase(std::remove_if(o.mods_out.begin(), o.mods_out.end(),
+                             [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
+            printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
+        }
         if (adds.size() > 3) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());

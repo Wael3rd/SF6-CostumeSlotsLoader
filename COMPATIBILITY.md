@@ -32,6 +32,11 @@ The loader therefore does two things at every launch where something changed:
 | A part a mod made for an older layout of the game, in a folder the outfit's scene no longer uses (Aria for Ingrid hides her face and hair in Outfit 1's folders, Drive Tech takes them from Outfit 2's) | The mod's part is never shown | The slot takes the mod's part of the same number, with the original material file of the place it replaces, and the scene points at it (new in 1.8, to confirm in game) |
 | A mod with a real costume and, next to it, a file or two for another outfit (Athena for Ingrid: one mesh for Drive Tech) | A second entry that is the other outfit almost untouched | The small entry is dropped: it is not an outfit of its own (new in 1.8) |
 | Physics files next to the parts (`esf032_001_02_chain.chain`), where the game keeps them, rather than in a part folder | The new hair or cloth moves with the original outfit's physics, or not at all | Reads the part from the file name and points the slot's physics settings at the mod's files |
+| Colour files, colour-variation data or high-resolution textures a mod does not ship, found among the files of another mod | An outfit shows the colours or textures of another mod, depending on which mods are installed (Cammy) | A slot only uses its own mod's files, else the game's |
+| Texture references with doubled slashes or backslashes | The outfit waits forever for a texture that moved, or shows the original outfit | The references follow the texture to its slot |
+| Files placed directly in `product/model/` (`1.tex`) | A texture named by the materials is missing, the outfit is replaced by the original | Taken from folder mods: the game keeps none there |
+| Material file made for an older layout of the material (every material one parameter short of the game's) | Dark body, opaque fabric, wrong colours | Rebuilt on the game's file for that part, keeping the mod's textures, flags and values |
+| Add-on made for another outfit's folder (a hair for Outfit 1), put with a costume in one sub-folder | The add-on becomes an outfit of its own or is ignored | Its parts go to the costume when it has none of that part; only the combined outfit is made |
 | Model folder shared by two outfits of the character (Dhalsim) | Another outfit shown instead of the mod | Maps the mod to the outfit that owns the folder (the lowest costume number) |
 | Character played on trial, or DLC unlocked by a script | 100 empty outfits, loading stalls on the first one | Only the slots in use are declared to the game |
 | A Street Fighter 6 still closing holds the old pak | Old costumes kept for good | Waits for it, and if it does not let go, changes nothing and retries at the next launch |
@@ -48,7 +53,7 @@ reader rewrites all 1,530 original colour files byte for byte.
 
 ## Mods tested
 
-Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "Works" means seen in game
+Tested on 2026-09-27 and 2026-09-30 with official REFramework 1.5.8 and the game up to date. "Works" means seen in game
 (training, character select, replays); Ryu Outfit I and Vegeta Majin were also played online.
 
 | Character | Mod | Result | Notes |
@@ -88,6 +93,19 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 | Marisa | [Marisa Drive Tech Wear Alt](https://www.nexusmods.com/streetfighter6/mods/3782) | Works |  |
 | Alex | [Minotaur Alex](https://www.nexusmods.com/streetfighter6/mods/3760) | Works |  |
 | Yasmine | [Yasmine shorts](https://www.nexusmods.com/streetfighter6/mods/3904) | Works | Reported to crash on some AMD GPUs even without the loader |
+| Cammy | [Camo Cammy](https://www.nexusmods.com/streetfighter6/mods/2277) | Works | 1.8.1: its material file names a texture with a doubled slash |
+| Cammy | [Dance Outfit for Cammy](https://www.nexusmods.com/streetfighter6/mods/645) | Works | 2023 mod: 1.8.1 rebuilds its material file (dark body, opaque fabric before), takes its `1.tex`. With [BellyHair01](https://www.nexusmods.com/streetfighter6/mods/645) (hair made for Outfit 1) in one sub-folder: one outfit with the hair. The hair keeps its own colour (no colour mask) |
+| Cammy | [Cammy cosplay Zani](https://www.nexusmods.com/streetfighter6/mods/2676) | Works | Costume, without horn, hair variants (bundle) |
+| Cammy | [Cammy 2B Reincarnation](https://www.nexusmods.com/streetfighter6/mods/1609) | Works | Reported to make other Cammy mods lose their colours: that was the colour-file borrowing, fixed in 1.8.1 |
+| Cammy | [Cammy - Escape from Shadaloo](https://www.nexusmods.com/streetfighter6/mods/2007) | Works | Mesh only: original colours (it borrowed another mod's before 1.8.1) |
+| Cammy | [B Style Cammy Bunny Ver](https://www.nexusmods.com/streetfighter6/mods/3917) | Works | |
+| Cammy | [Cammy Alt Costume Bare Legs](https://www.nexusmods.com/streetfighter6/mods/3911) | Works | Colours of the jacket and gloves wrong before 1.8.1 (high-resolution textures of another mod) |
+| C. Viper | [C. Viper Trench Coat](https://www.nexusmods.com/streetfighter6/mods/3107) | Works | Froze the select screen before 1.8.1 (backslash references) |
+| C. Viper | [C Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) | Works | Wing physics not confirmed |
+| C. Viper | [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) | Works | No problem seen |
+| C. Viper | [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) | Works | No problem seen |
+| Lily | [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) | Works | No problem seen |
+| Dhalsim | [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) | Works | No problem seen |
 
 ## Not supported yet
 
@@ -96,6 +114,11 @@ Tested on 2026-09-27 with official REFramework 1.5.8 and the game up to date. "W
 - Colour-only mods, which change the colours of an original outfit without any model
   ([CVS Shin Akuma Inspired Color](https://www.nexusmods.com/streetfighter6/mods/3988)): ignored. How such
   a mod should appear (a slot of its own, or the original outfit changed) is still to be decided.
+- Mods made only of textures and colours, without a model ([Cammy C4 Pale Skin](https://www.nexusmods.com/streetfighter6/mods/2850)),
+  and a mod of one file ([A.K.I No Sleeves](https://www.nexusmods.com/streetfighter6/mods/1591)) whose file the
+  loader does not take as an outfit: no outfit is made.
+- A mod without colour files (Vegeta Majin) has one visible colour: the game's colours for that outfit apply
+  to materials they do not name. As with the mod installed alone.
 - Characters released after the loader's tables were built (they cover the 31 characters up to Yasmine).
 - An accessory mod is applied to the original outfit, unless it sits in one sub-folder of the character
   with a costume for the same outfit, which it then completes.

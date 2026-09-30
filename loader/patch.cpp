@@ -261,6 +261,22 @@ size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
     size_t dlen = old_dir.size();
     size_t total = 0;
 
+    // References written with backslashes ("product\\model\\esf\\esf030\\002\\01\\glove_ALBD.tex", C. Viper
+    // Trench Coat) are the same files as the game reads them, but not for the matching below: they are
+    // written with slashes, in place, so that they follow the slot instead of pointing at a folder the
+    // mod's textures left
+    {
+        const std::string pat = "product\\";
+        for (size_t i = 0; i + 2 * pat.size() <= data.size(); i += 2) {
+            bool eq = true;
+            for (size_t k = 0; k < pat.size() && eq; k++)
+                eq = data[i + 2 * k + 1] == 0 && std::tolower(data[i + 2 * k]) == pat[k];
+            if (!eq) continue;
+            for (size_t j = i; j + 1 < data.size() && data[j + 1] == 0 && data[j] >= 0x20 && data[j] < 0x7f; j += 2)
+                if (data[j] == '\\') data[j] = '/';
+        }
+    }
+
     for (size_t i = 0; i + dlen <= data.size(); ) {
         if (std::memcmp(data.data() + i, old_dir.data(), dlen) != 0) {
             i += 2; continue;
@@ -271,7 +287,11 @@ size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
         while (!rest.empty() && rest.back() == '\0') rest.pop_back();
         std::string rest_low = to_lower(rest);
 
-        if (mod_tex_keys.count(rest_low)) {
+        // A doubled slash in a reference ("002/01//Knit_CMASK.tex") names the same file as the game
+        // reads it (paths are hashed with slashes collapsed): match it as the single-slash path
+        std::string key = rest_low;
+        for (size_t q; (q = key.find("//")) != std::string::npos; ) key.erase(q, 1);
+        if (mod_tex_keys.count(key)) {
             std::memcpy(data.data() + i, new_dir.data(), dlen);
             // Same stem rename as relocate_path(): the first "<fighter>_<old>_" of the file name
             size_t name_at = rest_low.rfind('/');
@@ -279,6 +299,20 @@ size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
             size_t p = rest_low.find(old_pfx, name_at);
             if (p != std::string::npos && new_pfx16.size() == old_pfx.size() * 2)
                 std::memcpy(data.data() + i + dlen + 2 * p, new_pfx16.data(), new_pfx16.size());
+            // Written back with a single slash where the mod had doubled it: the game is not known to
+            // resolve "01//Knit_CMASK.tex" (a resource that never resolves stalls the character); the
+            // string gets shorter, its end is filled with zeros
+            if (key.size() != rest_low.size()) {
+                // the rest with the renamed prefix, read again from the data
+                std::string cur = read_u16_string(data.data(), data.size(), i + dlen, &str_end);
+                for (size_t q; (q = cur.find("//")) != std::string::npos; ) cur.erase(q, 1);
+                const size_t old_chars = rest.size();
+                for (size_t k = 0; k < old_chars; k++) {
+                    const uint16_t ch = k < cur.size() ? uint16_t((unsigned char)cur[k]) : 0;
+                    data[i + dlen + 2 * k] = (uint8_t)(ch & 0xFF);
+                    data[i + dlen + 2 * k + 1] = 0;
+                }
+            }
             total++;
         }
         i += dlen;
@@ -758,6 +792,116 @@ int texture_mip_check(std::vector<uint8_t>& b, bool repair, int* repaired) {
     }
     if (repaired) (*repaired) += bad;
     return 0;
+}
+
+namespace {
+std::string mdf_str(const std::vector<uint8_t>& b, uint64_t o) {
+    std::string s;
+    for (size_t k = size_t(o); o && k + 1 < b.size(); k += 2) {
+        const uint16_t c = uint16_t(b[k] | (b[k + 1] << 8));
+        if (!c) break;
+        s += char(c);
+    }
+    return s;
+}
+struct MdfTex { std::string param, path; size_t entry_at; };
+struct MdfParam { std::string name; uint32_t offset = 0, count = 0; };
+struct MdfMat { std::string name, master; uint32_t block = 0, params = 0, flags = 0; size_t header = 0;
+                uint64_t param_data = 0; std::vector<MdfParam> plist; std::vector<MdfTex> tex; };
+bool mdf_read(const std::vector<uint8_t>& b, std::vector<MdfMat>& out) {
+    if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return false;
+    int16_t count; memcpy(&count, b.data() + 6, 2);
+    if (count <= 0 || 16 + 100ull * count > b.size()) return false;
+    for (int i = 0; i < count; i++) {
+        const size_t h = 16 + 100ull * i;
+        uint64_t name_off, tex_off; uint32_t tex_count;
+        memcpy(&name_off, b.data() + h, 8); memcpy(&tex_count, b.data() + h + 20, 4); memcpy(&tex_off, b.data() + h + 60, 8);
+        MdfMat m; m.name = mdf_str(b, name_off);
+        memcpy(&m.block, b.data() + h + 12, 4); memcpy(&m.params, b.data() + h + 16, 4);
+        memcpy(&m.flags, b.data() + h + 40, 4); m.header = h;
+        uint64_t master_off; memcpy(&master_off, b.data() + h + 84, 8);
+        m.master = mdf_str(b, master_off);
+        {
+            uint64_t ph, pd; memcpy(&ph, b.data() + h + 52, 8); memcpy(&pd, b.data() + h + 76, 8);
+            m.param_data = pd;
+            for (uint32_t k = 0; k < m.params; k++) {
+                const size_t e = size_t(ph) + 24ull * k;
+                if (e + 24 > b.size()) return false;
+                uint64_t no; MdfParam pr; memcpy(&no, b.data() + e, 8);
+                memcpy(&pr.offset, b.data() + e + 16, 4); memcpy(&pr.count, b.data() + e + 20, 4);
+                pr.name = mdf_str(b, no);
+                m.plist.push_back(std::move(pr));
+            }
+        }
+        for (uint32_t t = 0; t < tex_count; t++) {
+            const size_t e = size_t(tex_off) + 32ull * t;
+            if (e + 32 > b.size()) return false;
+            uint64_t po, ph; memcpy(&po, b.data() + e, 8); memcpy(&ph, b.data() + e + 16, 8);
+            m.tex.push_back({mdf_str(b, po), mdf_str(b, ph), e});
+        }
+        out.push_back(std::move(m));
+    }
+    return true;
+}
+std::string mdf_low(std::string s) { for (auto& c : s) c = char(std::tolower((unsigned char)c)); return s; }
+}
+
+bool modernize_mdf2(const std::vector<uint8_t>& mod, const std::vector<uint8_t>& game,
+                    std::vector<uint8_t>& out, int* rebound) {
+    std::vector<MdfMat> mm, gm;
+    if (!mdf_read(mod, mm) || !mdf_read(game, gm) || mm.size() != gm.size()) return false;
+    for (auto& g : gm) {
+        bool found = false;
+        for (auto& m : mm) if (m.name == g.name) { found = true; break; }
+        if (!found) return false;
+    }
+    // Only a file made for an older layout of the material: every material has the game's name and master
+    // material, and exactly the parameters the game's has minus what it gained since (16 bytes each; Dance
+    // Outfit for Cammy, 2023: one parameter less in all its 10 materials). A mod that changes parameters on
+    // purpose has another shape (Yasmine Shorts: more bytes, the same count) and is left alone.
+    for (auto& g : gm)
+        for (auto& m : mm) {
+            if (m.name != g.name) continue;
+            if (m.master != g.master || g.params <= m.params || g.block <= m.block
+                || g.block - m.block != 16u * (g.params - m.params)) return false;
+        }
+    std::vector<uint8_t> res = game;
+    int n = 0;
+    // The mod's rendering flags of a material (header +40: the game's leotard has 0x1800_0018, the mod's, sheer,
+    // 0x1800_001B) are what makes fabric translucent: they stay the mod's
+    for (auto& g : gm)
+        for (auto& m : mm) {
+            if (m.name != g.name) continue;
+            if (m.flags != g.flags) memcpy(res.data() + g.header + 40, &m.flags, 4);
+            // The mod's parameter values, by name (alpha test, dissolve, base colour...): what the mod set
+            // for the material stays the mod's; a parameter the game gained keeps the game's value
+            for (auto& gp : g.plist)
+                for (auto& mp : m.plist) {
+                    if (mp.name != gp.name || mp.count != gp.count) continue;
+                    const size_t src = size_t(m.param_data) + mp.offset, dst = size_t(g.param_data) + gp.offset;
+                    if (src + 4ull * gp.count <= mod.size() && dst + 4ull * gp.count <= res.size())
+                        memcpy(res.data() + dst, mod.data() + src, 4ull * gp.count);
+                    break;
+                }
+        }
+    for (auto& g : gm)
+        for (auto& m : mm) {
+            if (m.name != g.name) continue;
+            for (auto& gt : g.tex)
+                for (auto& mt : m.tex) {
+                    if (mt.param != gt.param || mt.path.empty() || mdf_low(mt.path) == mdf_low(gt.path)) continue;
+                    // the mod's path goes to the end of the file, the binding points at it
+                    const uint64_t at = res.size();
+                    for (char c : mt.path) { res.push_back((uint8_t)c); res.push_back(0); }
+                    res.push_back(0); res.push_back(0);
+                    memcpy(res.data() + gt.entry_at + 16, &at, 8);
+                    n++;
+                    break;
+                }
+        }
+    out = std::move(res);
+    if (rebound) *rebound = n;
+    return true;
 }
 
 bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {

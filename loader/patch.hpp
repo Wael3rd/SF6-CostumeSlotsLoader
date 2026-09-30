@@ -62,6 +62,13 @@ bool cmd_tints(const std::vector<uint8_t>& data, std::vector<CmdCluster>& out);
 // are both 64 or less (BC1, BC3, BC4, BC5, BC7). False when that level is missing or smaller than 4x4.
 bool texture_channel_means(const std::vector<uint8_t>& tex, float out[4]);
 
+// EXPERIMENTAL. Rebuilds a mod's material file (.mdf2) on the game's own file for the same part: same
+// material names required (false otherwise, out untouched); the result is the game's file, with each
+// texture binding that differs in the mod's file (same material, same parameter) pointing at the mod's
+// texture. For material files made for an older engine, whose parameter blocks are outdated.
+bool modernize_mdf2(const std::vector<uint8_t>& mod, const std::vector<uint8_t>& game,
+                    std::vector<uint8_t>& out, int* rebound);
+
 // Type signatures of an RSZ user file (.user): the game refuses an instance whose type CRC is not the
 // one of its current build. A game update can change a type's CRC without changing its layout (an enum
 // that gains values); mod files made before it then load without their data.

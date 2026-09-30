@@ -1,7 +1,36 @@
 # Changelog
 
-## Unreleased
+## 1.8.1 (2026-09-30)
 
+Found by testing with a large set of Cammy, C. Viper and Ingrid mods installed together.
+
+### Fixed
+- **A slot no longer takes files from another mod.** The colour files and the colour-variation data a mod does
+  not ship, and the high-resolution (streaming) version of a texture, were looked up among the files of all
+  installed mods. Several mods ship textures of the same name for the same outfit (five for Cammy's Outfit 1),
+  so an outfit got the colours or the pictures of another one, and which one depended on the other mods
+  installed: Escape from Shadaloo lost its green, Alt Bare Legs its jacket and glove colours. A slot now uses
+  its own mod's files, else the game's, as when the mod is installed alone.
+- **Texture references written with doubled slashes (`002/01//Knit_CMASK.tex`) or backslashes
+  (`product\model\...`)** now follow the texture to its slot. Before, the outfit waited forever for a texture
+  that had moved (Camo Cammy showed the original outfit, then froze; C. Viper Trench Coat froze the select
+  screen).
+- **Files placed directly in `product/model/`** (Dance Outfit for Cammy names a `1.tex` there) are taken from
+  folder mods; the game keeps none there, so nothing can be overridden.
+- **Material files made for an older layout** are rebuilt on the game's file for that part: when every
+  material has the game's name and master material but exactly the parameters the game had minus those it
+  gained since, the game's file is used, with the mod's texture bindings, rendering flags and parameter
+  values (Dance Outfit for Cammy showed a dark body and opaque fabric; it shows the sheer dancer). Measured on
+  41 material files of a large collection: only that one matches.
+- **A part hidden on purpose stays hidden.** A mod that hides a face or hair with a reduced mesh naming a
+  material no file defines (AoD replace Ingrid) no longer gets the original part back, and such an outfit is
+  no longer left out.
+- **A partial add-on brings its parts to a costume put in the same sub-folder**, even when it was made for
+  another outfit's folder (BellyHair for Dance Outfit: hair in Outfit 1's folder, costume of Outfit 2). Only the
+  combined outfit is made when both are in one sub-folder of the character; archive bundles keep the base and
+  each variant. Note: Ken SFV with Ken SFV Hair in one sub-folder now gives only the combined outfit.
+
+### Script
 - The script does nothing while a fight is running (match, replay, training outside the pause) when the
   native plugin is there. The signal is the fight clock (`gBattle.Game.stage_timer`) moving; it stops in
   pause, menus and loading, and the checks come back at once. Before, the save, the costume ownership and

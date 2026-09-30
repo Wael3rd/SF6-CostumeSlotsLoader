@@ -22,13 +22,19 @@ folder; the loader rewrites it at every launch where something changed.
 - Mods whose physics files sit next to the parts now use them (Aloha Ryu, Mummy Dhalsim, the C. Viper
   modular mods, Athena, Manon, Juri, Akuma, Cammy, Mai): nothing broken (2026-09-29).
 
-## New in 1.8, to check in game
+## Confirmed in game on 2026-09-30
 
-- **Ingrid, AoD replace Ingrid (Aria)**: the face and hair parts the mod carries for an older layout are now
-  taken over; its reduced mesh names a material no file defines. Look for the face hidden as the mod intends,
-  and for any freeze on Ingrid's select screen (the log line says `kept as the mod made it`).
-- **Ingrid as Athena**: one outfit, no second Drive Tech entry.
-- Everything else must be unchanged, in particular Mummy Dhalsim's head.
+- Cammy: Camo, Dance Outfit (with its hair, sheer fabric), Zani, 2B Reincarnation, Escape from Shadaloo, Bunny,
+  Alt Bare Legs (colours), Christie, Imperium; no mod borrows another's colours any more.
+- C. Viper Trench Coat no longer freezes; Swimsuit's eight variants and the other Viper mods load.
+- Ingrid AoD replace Ingrid (hidden face and hair kept), Athena as one outfit, Chique Casual's hair physics.
+- Mummy Dhalsim's head.
+
+## New in 1.8.1, to check in game
+
+- **C. Viper Bayonetta**: whether the wings have physics (not confirmed).
+- **Ken SFV with Ken SFV Hair in one sub-folder**: only the combined outfit is made now.
+- **Any character with several mods of the same outfit** (their textures used to be mixed): look at the colours.
 
 ## New in 1.7, to check in game
 
