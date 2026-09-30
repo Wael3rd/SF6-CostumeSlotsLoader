@@ -192,10 +192,63 @@ local function apply(param, stage)
     scr.applied[stage] = v.key
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- The VS screen (agent VSInfoOffline): stage name c_bg/e_text_stagename, stage image
+-- c_bg/e_texture_bg. The stage fought is the one last focused on the stage select screen (a
+-- rematch or a return to character select keeps it).
+-- ---------------------------------------------------------------------------------------------
+
+local vs = { agent_addr = nil, text = nil, tex = nil }
+
+local function find_child(ctrl, name, depth)
+    if not ctrl or depth > 8 then return nil end
+    local c = ctrl:call("get_Child")
+    while c do
+        if c:call("get_Name") == name then return c end
+        local hit = find_child(c, name, depth + 1)
+        if hit then return hit end
+        c = c:call("get_Next")
+    end
+    return nil
+end
+
+local function visible_agent(agent_name)
+    local mgr = sdk.get_managed_singleton("app.UIAgentManager")
+    local list = mgr and mgr:get_field("_Entries")
+    if not list then return nil end
+    for i = 0, list:call("get_Count") - 1 do
+        local agent = list:call("get_Item", i).Agent
+        local go = agent and agent:call("get_GameObject")
+        if go and go:call("get_Name") == agent_name then
+            local cm = agent:call("get_ControlMain")
+            if cm and cm:call("get_ActualVisible") then return agent, cm end
+        end
+    end
+    return nil
+end
+
+local function vs_screen()
+    local stage = scr.decided
+    local idx = stage and selected_index(stage) or 0
+    if idx == 0 then return end
+    local agent, cm = visible_agent("VSInfoOffline")
+    if not agent then vs.agent_addr = nil; return end
+    if vs.agent_addr ~= agent:get_address() then
+        vs.agent_addr = agent:get_address()
+        local bg = find_child(cm, "c_bg", 0)
+        vs.text = bg and find_child(bg, "e_text_stagename", 0)
+        vs.tex = bg and find_child(bg, "e_texture_bg", 0)
+    end
+    local v = variants_of[stage][idx]
+    if vs.text then set_text(vs.text, display_name(stage, v)) end
+    if vs.tex and v.preview and v.preview ~= "" then set_texture(vs.tex, preview_holder(v.preview)) end
+end
+
 local function on_late_update()
     frame_no = frame_no + 1
     local agent = stage_select_agent()
     if not agent then
+        vs_screen()
         if scr.param then status = "not on the stage select screen" end
         scr.param, scr.agent_addr, scr.stage = nil, nil, nil
         scr.applied, scr.written = {}, {}
@@ -210,6 +263,7 @@ local function on_late_update()
     local param = scr.param
     local stage = focused_stage(param)
     if stage == nil then return end
+    scr.decided = stage
     if stage ~= scr.stage then
         scr.stage = stage
         scr.applied[stage], scr.written[stage] = nil, nil   -- the game rewrites the name and the image
