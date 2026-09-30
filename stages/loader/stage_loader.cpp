@@ -24,7 +24,7 @@ namespace {
 const char* STAGE_MARKER = "natives/stm/sf6_stage_slots.marker";
 const char* COSTUME_MARKER = "natives/stm/sf6_costume_slots.marker";
 // Part of the fingerprint: bump it when the pak layout or the preview conversion changes.
-const char* FORMAT_VERSION = "stageslots-1";
+const char* FORMAT_VERSION = "stageslots-2";
 const char* TEX_SUFFIX = ".tex.241101895";
 
 // ---------------------------------------------------------------------------------------------

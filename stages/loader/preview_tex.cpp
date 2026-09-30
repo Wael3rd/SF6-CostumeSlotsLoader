@@ -86,7 +86,7 @@ bool read_whole_file(const std::wstring& path, std::vector<uint8_t>& out) {
 }
 
 // ---------------------------------------------------------------------------
-// Crop rectangle: full width, band height = width/4, centred at 45% of the image
+// Crop rectangle: full width, band height = width/4, centred at 60% of the image (screenshots keep the fighters in the lower half)
 // height, clamped inside the image. If width/4 does not fit inside the image
 // height (very wide/panoramic source), the band height is clamped to the image
 // height instead of failing -- still a centred crop of the source.
@@ -95,7 +95,7 @@ bool read_whole_file(const std::wstring& path, std::vector<uint8_t>& out) {
 void compute_crop(int img_w, int img_h, int& crop_y, int& crop_h) {
     int band_h = std::max(1, img_w / 4);
     if (band_h > img_h) band_h = img_h;
-    int center_y = (int)std::lround(img_h * 0.45);
+    int center_y = (int)std::lround(img_h * 0.60);
     int top = center_y - band_h / 2;
     top = std::max(0, std::min(top, img_h - band_h));
     crop_y = top;

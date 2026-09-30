@@ -93,23 +93,34 @@ local function focused_stage(param)
     return nil
 end
 
--- Preview textures of the variants, created once and kept for the session
-local holders = {}
-local SHOW_PREVIEWS = false          -- off: a generated preview texture crashed the loading thread (30/09)
+-- Preview textures of the variants, created once and kept for the session. A texture resource
+-- loads in the background: handing it to the GUI while it loads crashed the game (30/09), so a
+-- holder is only used LOAD_FRAMES after its creation, and the previews of a stage are created as
+-- soon as the stage is focused.
+local SHOW_PREVIEWS = true
+local LOAD_FRAMES = 60
+local frame_no = 0
+local holders = {}                     -- path -> { holder, frame } or false
+
 local function preview_holder(path)
     if not SHOW_PREVIEWS or not path or path == "" then return nil end
-    local h = holders[path]
-    if h == nil then
-        h = false
+    local e = holders[path]
+    if e == nil then
+        e = false
         local res = sdk.create_resource("via.render.TextureResource", path)
         if res then
             res:add_ref()
             local holder = res:create_holder("via.render.TextureResourceHolder")
-            if holder then holder:add_ref(); h = holder end
+            if holder then holder:add_ref(); e = { holder = holder, frame = frame_no } end
         end
-        holders[path] = h
+        holders[path] = e
     end
-    return h or nil
+    if not e or frame_no - e.frame < LOAD_FRAMES then return nil end
+    return e.holder
+end
+
+local function preload_previews(stage)
+    for _, v in ipairs(variants_of[stage] or {}) do preview_holder(v.preview) end
 end
 
 local function vanilla_holder(param, stage)
@@ -129,10 +140,14 @@ local function set_text(text_obj, s)
     text_obj:call("set_Message", ms)
 end
 
+-- A TextureResourceHolder keeps its native resource at +0x10; getTexture returns a new holder
+-- every call, so textures are compared by resource.
+local function resource_of(holder) return holder and holder:read_qword(0x10) or 0 end
+
 local function set_texture(tex_obj, holder)
     if not holder then return end
     local cur = M_GET_TEXTURE:call(tex_obj)
-    if cur and cur:get_address() == holder:get_address() then return end
+    if cur and resource_of(cur) == resource_of(holder) then return end
     tex_obj:call("setTexture", holder)
 end
 
@@ -161,11 +176,13 @@ local function apply(param, stage)
     if not scr.applied[stage] then learn_vanilla_name(text0, stage) end
     local v = variants_of[stage][idx]
     set_text(text0, v.name)
-    set_texture(tex0, preview_holder(v.preview))
+    if v.preview and v.preview ~= "" then set_texture(tex0, preview_holder(v.preview))
+    else set_texture(tex0, vanilla_holder(param, stage)) end
     scr.applied[stage] = v.key
 end
 
 local function on_late_update()
+    frame_no = frame_no + 1
     local agent = stage_select_agent()
     if not agent then
         if scr.param then status = "not on the stage select screen" end
@@ -186,6 +203,7 @@ local function on_late_update()
         scr.stage = stage
         scr.applied[stage] = nil          -- the game rewrites the name and the image for this stage
         scr.settle = SETTLE_FRAMES
+        preload_previews(stage)
     end
     if scr.settle > 0 then scr.settle = scr.settle - 1; pending = 0; return end
     local list = variants_of[stage]
