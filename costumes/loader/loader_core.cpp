@@ -1284,6 +1284,24 @@ static std::string json_escape(const std::string& v) {
     return o;
 }
 
+// outfits.json names our pak, which the audit tells from the mod paks by that name. A launch that
+// rebuilds nothing can still find it under another number (moved by the stage loader or by us).
+static void sync_outfits_pak(const std::string& path, const std::string& pak_name) {
+    FILE* fr = fopen(path.c_str(), "rb");
+    if (!fr) return;
+    std::string js; char buf[65536]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), fr)) > 0) js.append(buf, n);
+    fclose(fr);
+    const std::string key = "\"pak\": \"";
+    size_t a = js.find(key);
+    if (a == std::string::npos) return;
+    a += key.size();
+    size_t b = js.find('"', a);
+    if (b == std::string::npos || js.compare(a, b - a, pak_name) == 0) return;
+    js.replace(a, b - a, pak_name);
+    if (FILE* fw = fopen(path.c_str(), "wb")) { fwrite(js.data(), 1, js.size(), fw); fclose(fw); }
+}
+
 // outfits.json: every outfit of the last generation with the mod it comes from, read by the audit script
 static void write_outfits_json(const std::string& path, const std::vector<SlotInfo>& slots,
                                const std::string& pak_name) {
@@ -4035,6 +4053,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         if (reg_check.fingerprint == new_fp && !new_fp.empty()) {
             // Check our pak exists
             if (GetFileAttributesA(target_path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
                      target_name, std::chrono::duration<double,std::milli>(t1-t0).count());
@@ -4043,6 +4062,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             // Same mods, our pak one number off (the stage pak came or went below it): it only
             // has to move, the game reading the patch paks in an unbroken row from 001
             if (our_paks.size() == 1 && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
+                sync_outfits_pak(registry_dir + "\\outfits.json", target_name);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match), %s moved to %s in %.1f ms\n",
                      our_paks[0].path.c_str(), target_name,
