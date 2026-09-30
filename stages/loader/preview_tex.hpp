@@ -1,8 +1,9 @@
 #pragma once
 
 // Turns a stage mod's screenshot (PNG or JPEG) into an SF6 stage-select preview texture
-// (.tex.241101895): decode -> crop to 4:1 -> resize to 1920x480 -> encode as an uncompressed
-// RGBA8 .tex with a single mip. See preview_tex.cpp for the exact header layout.
+// (.tex.241101895): decode -> crop to 4:1 -> resize to 2048x512 -> BC1 (DXT1) compress -> a
+// single-mip .tex whose header is byte-identical to the vanilla stage preview (format
+// BC1_UNORM_SRGB, flags, swizzle_control, ...). See preview_tex.cpp for the exact header layout.
 //
 // SEH-safe: never throws, never lets an exception escape. Runs fine from DllMain (no threads,
 // no LoadLibrary, static CRT).

@@ -1,7 +1,7 @@
 // Stage-select preview texture builder.
 //
-// Pipeline: decode PNG/JPEG (stb_image) -> crop to a 4:1 band -> resize to 1920x480 -> write an
-// SF6 .tex.241101895 file, uncompressed RGBA8 (sRGB), single mip.
+// Pipeline: decode PNG/JPEG (stb_image) -> crop to a 4:1 band -> resize to 2048x512 -> BC1
+// (DXT1) compress with stb_dxt -> write an SF6 .tex.241101895 file, single mip.
 //
 // .tex header layout (SF6 / version 241101895, confirmed against the vanilla stage preview
 // natives/stm/product/gui/data/area_image/ess/ess0000_00/tex_stageimage_ess0000_00_im.tex.241101895
@@ -11,12 +11,12 @@
 //   offset  size  field
 //   0       4     magic "TEX\0"
 //   4       4     version (int32)            = 241101895
-//   8       2     width  (uint16)
-//   10      2     height (uint16)
+//   8       2     width  (uint16)            = 2048
+//   10      2     height (uint16)            = 512
 //   12      2     depth  (uint16)             = 1
 //   14      1     image_count (uint8)         = 1
-//   15      1     mip_header_size (uint8)     = mip_count * 16
-//   16      4     format (int32, DXGI)        = 29 (R8G8B8A8_UNORM_SRGB)
+//   15      1     mip_header_size (uint8)     = mip_count * 16 = 16
+//   16      4     format (int32, DXGI)        = 72 (BC1_UNORM_SRGB)
 //   20      4     swizzle_control (int32)     = -1  (matches vanilla)
 //   24      4     cubemap_marker (uint32)     = 0
 //   28      4     flags (int32)               = 0x800 (matches vanilla ess0000_00 preview)
@@ -26,14 +26,18 @@
 //   36      2     seven (uint16)              = 0
 //   38      2     one (uint16)                = 0
 //   40      16*n  mip table: { offset:int64, pitch:int32, size:int32 } per (mip_count*image_count)
-//   ...           mip data (raw RGBA8 rows, pitch = width*4)
+//                 mip[0] = { offset:56, pitch:4096, size:524288 }  (byte-identical to vanilla)
+//   56      524288 mip data: BC1 blocks, row-major, 8 bytes/block, pitch = (width/4)*8 = 4096
 //
-// Format choice: the vanilla preview is BC1_UNORM_SRGB (format 72, block-compressed). This module
-// writes UNCOMPRESSED RGBA8 as required by the brief, but keeps the same colour space: format 29
-// (R8G8B8A8_UNORM_SRGB), not 28 (UNORM), so colours match what the vanilla sRGB preview shows.
-// flags/swizzle_control/cubemap_marker/swizzle_* are copied from the vanilla file rather than
-// guessed, since they are independent of pixel format and this is a proven single-mip, single-
-// image, non-cubemap texture from the same game build and the same GUI preview pipeline.
+// Every header field (version, dimensions, image_count, mip_count, format, swizzle_control,
+// cubemap_marker, flags, swizzle_*, mip offset/pitch/size) is byte-identical to the vanilla
+// ess0000_00 preview: an in-game test showed a white texture and a crash right after setTexture
+// when this module wrote an uncompressed RGBA8 texture instead (format/size differed from every
+// other stage preview the game has ever loaded). Only the pixel payload differs now.
+//
+// sRGB: BC1_UNORM_SRGB stores the same bytes as BC1_UNORM; the GPU applies the sRGB->linear
+// conversion on sampling. The encoder is fed the screenshot's sRGB-encoded bytes as-is -- they
+// are not linearised before compression.
 
 #include "preview_tex.hpp"
 
@@ -42,6 +46,9 @@
 #define STBI_NO_STDIO
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
+
+#define STB_DXT_IMPLEMENTATION
+#include "third_party/stb_dxt.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -53,11 +60,11 @@
 namespace {
 
 constexpr int32_t  TEX_VERSION      = 241101895;
-constexpr int32_t  TEX_FORMAT_RGBA8_SRGB = 29;   // DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+constexpr int32_t  TEX_FORMAT_BC1_SRGB = 72;     // DXGI_FORMAT_BC1_UNORM_SRGB
 constexpr int32_t  TEX_FLAGS        = 0x800;     // matches vanilla ess0000_00 preview
 constexpr int32_t  TEX_SWIZZLE_CTRL = -1;        // matches vanilla
-constexpr int      OUT_W = 1920;
-constexpr int      OUT_H = 480;                  // OUT_W / 4
+constexpr int      OUT_W = 2048;
+constexpr int      OUT_H = 512;                  // OUT_W / 4, matches vanilla exactly
 
 // ---------------------------------------------------------------------------
 // File I/O (wide path, no CRT stdio file handle held by stb_image itself)
@@ -215,6 +222,28 @@ void resize_rgba(const uint8_t* src, int src_w, int src_h, uint8_t* out) {
 }
 
 // ---------------------------------------------------------------------------
+// BC1 (DXT1) encoding. Input is interleaved RGBA8 (w x h, both multiples of 4); alpha is
+// ignored (opaque BC1). Output is one 8-byte block per 4x4 pixel block, row-major, packed with
+// no padding (pitch = (w/4)*8), matching the vanilla mip layout exactly.
+// ---------------------------------------------------------------------------
+
+void encode_bc1(const uint8_t* rgba, int w, int h, std::vector<uint8_t>& out) {
+    const int blocks_w = w / 4, blocks_h = h / 4;
+    out.resize((size_t)blocks_w * blocks_h * 8);
+    uint8_t block[4 * 4 * 4];
+    for (int by = 0; by < blocks_h; by++) {
+        for (int bx = 0; bx < blocks_w; bx++) {
+            for (int row = 0; row < 4; row++) {
+                const uint8_t* src = rgba + ((size_t)(by * 4 + row) * w + bx * 4) * 4;
+                memcpy(block + row * 16, src, 16);
+            }
+            uint8_t* dest = out.data() + ((size_t)by * blocks_w + bx) * 8;
+            stb_compress_dxt_block(dest, block, /*alpha=*/0, STB_DXT_HIGHQUAL);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // .tex header writer
 // ---------------------------------------------------------------------------
 
@@ -233,7 +262,7 @@ void write_tex_header(std::vector<uint8_t>& out, int w, int h, uint32_t pitch, u
     put<uint16_t>(out, 12, 1);              // depth
     out[14] = 1;                            // image_count
     out[15] = 16;                           // mip_header_size (1 mip * 16)
-    put<int32_t>(out, 16, TEX_FORMAT_RGBA8_SRGB);
+    put<int32_t>(out, 16, TEX_FORMAT_BC1_SRGB);
     put<int32_t>(out, 20, TEX_SWIZZLE_CTRL);
     put<uint32_t>(out, 24, 0);              // cubemap_marker
     put<int32_t>(out, 28, TEX_FLAGS);
@@ -291,15 +320,18 @@ bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>
         resize_rgba(crop_ptr, img_w, crop_h, resized.data());
         stbi_image_free(pixels);
 
-        const uint32_t pitch = (uint32_t)OUT_W * 4;
-        const uint32_t data_size = pitch * (uint32_t)OUT_H;
-        if (resized.size() != data_size) {
+        std::vector<uint8_t> bc1;
+        encode_bc1(resized.data(), OUT_W, OUT_H, bc1);
+
+        const uint32_t pitch = (uint32_t)(OUT_W / 4) * 8;
+        const uint32_t data_size = pitch * (uint32_t)(OUT_H / 4);
+        if (bc1.size() != data_size) {
             err = "internal size mismatch";
             return false;
         }
 
         write_tex_header(out_tex, OUT_W, OUT_H, pitch, data_size);
-        out_tex.insert(out_tex.end(), resized.begin(), resized.end());
+        out_tex.insert(out_tex.end(), bc1.begin(), bc1.end());
         return true;
     } catch (...) {
         err = "unexpected error building preview texture";
