@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-30-havokcloth";
+static const char* LOADER_BUILD_ID = "2026-09-30-partspreload";
 
 // ============================================================================
 // Utility
@@ -2307,8 +2307,12 @@ static void add_slot_files(PakWriter& writer,
                     wi += ow16.size();
                 }
             }
-            // Fourth pass: point the scene at the slot's model_parts copy. Like CCVD, only from the
-            // second occurrence on: the first one sits in the scene's userdata table.
+            // Fourth pass: point the scene at the slot's model_parts copy, every occurrence. Unlike
+            // CCVD, the first one too: it sits in the scene's userdata table, which the game loads
+            // with the scene. Left on battle_ud/, the copy (and the weapon meshes it names) loaded
+            // only when the parts were set up: on the character select screen they were not ready
+            // yet and the weapons never appeared for the first player to pick the outfit (Lily
+            // Kenyan Summer C2); in battle the loading screen waited for them.
             if (!mp_old_s.empty()) {
                 std::vector<uint8_t> o16, n16;
                 for (char c : mp_old_s) { o16.push_back((uint8_t)c); o16.push_back(0); }
@@ -2319,7 +2323,7 @@ static void add_slot_files(PakWriter& writer,
                     for (size_t k = 0; k < o16.size(); k += 2)
                         if (tolower(vdata[wi + k]) != o16[k] || vdata[wi + k + 1] != 0) { eq = false; break; }
                     if (!eq) continue;
-                    if (++occ >= 2) { memcpy(vdata.data() + wi, n16.data(), n16.size()); done++; patched++; }
+                    ++occ; memcpy(vdata.data() + wi, n16.data(), n16.size()); done++; patched++;
                     wi += o16.size() - 2;
                 }
                 printf("      model parts: scene redirected (%d of %d references)\n", done, occ);
