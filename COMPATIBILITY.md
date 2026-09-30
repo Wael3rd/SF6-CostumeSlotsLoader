@@ -101,11 +101,11 @@ Tested on 2026-09-27 and 2026-09-30 with official REFramework 1.5.8 and the game
 | Cammy | [B Style Cammy Bunny Ver](https://www.nexusmods.com/streetfighter6/mods/3917) | Works | |
 | Cammy | [Cammy Alt Costume Bare Legs](https://www.nexusmods.com/streetfighter6/mods/3911) | Works | Colours of the jacket and gloves wrong before 1.8.1 (high-resolution textures of another mod) |
 | C. Viper | [C. Viper Trench Coat](https://www.nexusmods.com/streetfighter6/mods/3107) | Works | Froze the select screen before 1.8.1 (backslash references) |
-| C. Viper | [C Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) | Works | Wing physics not confirmed |
-| C. Viper | [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) | Works | No problem seen |
-| C. Viper | [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) | Works | No problem seen |
-| Lily | [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) | Works | No problem seen |
-| Dhalsim | [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) | Works | No problem seen |
+| C. Viper | [C Viper Bayonetta C2](https://www.nexusmods.com/streetfighter6/mods/3077) | Works | |
+| C. Viper | [C. Viper Battlesuit C2](https://www.nexusmods.com/streetfighter6/mods/3055) | Works |  |
+| C. Viper | [C. Viper Concept Outfit](https://www.nexusmods.com/streetfighter6/mods/3752) | Works |  |
+| Lily | [Lily Haruka Hoodie](https://www.nexusmods.com/streetfighter6/mods/1874) | Works |  |
+| Dhalsim | [Galaxy Avatar State Dhalsim](https://www.nexusmods.com/streetfighter6/mods/2985) | Works |  |
 
 ## Not supported yet
 

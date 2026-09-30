@@ -29,12 +29,8 @@ folder; the loader rewrites it at every launch where something changed.
 - C. Viper Trench Coat no longer freezes; Swimsuit's eight variants and the other Viper mods load.
 - Ingrid AoD replace Ingrid (hidden face and hair kept), Athena as one outfit, Chique Casual's hair physics.
 - Mummy Dhalsim's head.
-
-## New in 1.8.1, to check in game
-
-- **C. Viper Bayonetta**: whether the wings have physics (not confirmed).
-- **Ken SFV with Ken SFV Hair in one sub-folder**: only the combined outfit is made now.
-- **Any character with several mods of the same outfit** (their textures used to be mixed): look at the colours.
+- 1.8.1, all of it: C. Viper Bayonetta (wings included), Ken SFV with Ken SFV Hair in one sub-folder (only the
+  combined outfit), several mods of the same outfit installed together (colours no longer mixed).
 
 ## New in 1.7, to check in game
 
