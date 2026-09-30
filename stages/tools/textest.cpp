@@ -23,7 +23,7 @@
 #include "../loader/third_party/stb_image_write.h"
 
 #define BCDEC_IMPLEMENTATION
-#include "../loader/third_party/bcdec.h"
+#include "third_party/bcdec.h"   // common/third_party
 
 namespace {
 

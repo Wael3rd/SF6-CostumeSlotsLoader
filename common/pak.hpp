@@ -16,6 +16,11 @@
 uint64_t pak_path_hash(std::wstring_view path);
 uint64_t pak_path_hash(std::string_view  path); // ASCII convenience
 
+// A file each loader stores in the patch pak it writes, so that both tell their paks apart from
+// the mod paks and from each other. Patch order: mod paks < stage pak < costume pak.
+constexpr const char* COSTUME_SLOTS_MARKER = "natives/stm/sf6_costume_slots.marker";
+constexpr const char* STAGE_SLOTS_MARKER   = "natives/stm/sf6_stage_slots.marker";
+
 // ============================================================================
 // PakEntry  (48 bytes on disk, v4 format)
 // ============================================================================

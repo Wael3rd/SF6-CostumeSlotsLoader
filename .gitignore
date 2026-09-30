@@ -4,8 +4,13 @@
 *.lib
 *.dll
 *.pdb
+*.ilk
 __pycache__/
 test_out/
 out/
 *.zip
 obj/
+# build outputs (build.bat)
+build/
+# downloaded mods used for tests, never published
+test_mods/

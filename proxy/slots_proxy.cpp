@@ -1,8 +1,7 @@
-// SF6 AMD AGS proxy: Costume Slot Loader + Stage Slots
-// ------------------------------------------------------
-// The costume loader's proxy (amd_ags_proxy.cpp, built from its sources, unchanged) with the
-// stage slots around it. The game imports amd_ags_x64.dll from its own folder, so this DLL is
-// mapped before any engine code runs: the right moment to rebuild the paks.
+// SF6 AMD AGS proxy: Costume Slots + Stage Slots
+// ------------------------------------------------
+// The game imports amd_ags_x64.dll from its own folder, so this DLL is mapped before any
+// engine code runs: the right moment to rebuild the paks.
 //
 // DllMain: (1) stage_loader_run: stage pak, right above the mod paks (SEH-wrapped)
 //          (2) costume_loader_run: costume pak, above the stage pak (SEH-wrapped)
@@ -10,6 +9,11 @@
 //              watcher thread that hooks path_to_hash once a stage variant is selected
 //          (4) if amd_ags_x64_chain.dll exists next to us, load it from a thread
 // All AGS exports are forwarded to amd_ags_x64_real.dll via linker directives: no AGS code here.
+//
+// Built with SLOTS_NO_STAGES (build.bat costumes), the DLL is the costume loader alone: steps 1
+// and 3 are left out, no hook, and its only imports are kernel32 and bcrypt (hashing for the
+// "did the mods change" fingerprint). Anything else that wants this entry point goes through
+// amd_ags_x64_chain.dll, which is loaded only if the file is there.
 //
 // Chaining another tool that also wants amd_ags_x64.dll (HARD READ, MatchScout, ...):
 //   its  amd_ags_x64.dll  -> rename to  amd_ags_x64_chain.dll
@@ -19,9 +23,11 @@
 #include <stdio.h>
 #include "ags_forwarders.h"
 #include "loader_core.hpp"
-#include "../stage_loader.hpp"
-#include "../stage_log.hpp"
-#include "../stage_redirect.hpp"
+#ifndef SLOTS_NO_STAGES
+#include "stage_loader.hpp"
+#include "stage_log.hpp"
+#include "stage_redirect.hpp"
+#endif
 
 // Tell loader_core that we are NOT the exe (suppress stdout output).
 bool g_is_exe = false;
@@ -30,7 +36,9 @@ static const wchar_t* CHAIN_NAME = L"amd_ags_x64_chain.dll";
 
 static wchar_t g_chain_path[MAX_PATH];
 static wchar_t g_dll_dir[MAX_PATH];
+#ifndef SLOTS_NO_STAGES
 static std::vector<StageVariant> g_stage_variants;     // read by the watcher for the whole session
+#endif
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible
 // in support logs. Runs on its own thread, after DllMain returned.
@@ -47,6 +55,7 @@ static void chain_log(const wchar_t* path, bool ok) {
     fclose(f);
 }
 
+#ifndef SLOTS_NO_STAGES
 static void run_stage_loader() {
     __try {
         stage_loader_run(g_dll_dir, g_stage_variants);
@@ -55,6 +64,7 @@ static void run_stage_loader() {
         slog("stage loader: unexpected fault, stages left as they were");
     }
 }
+#endif
 
 static DWORD WINAPI load_chain(LPVOID) {
     HMODULE h = LoadLibraryW(g_chain_path);
@@ -72,9 +82,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             if (g_dll_dir[i] == L'\\' || g_dll_dir[i] == L'/') { g_dll_dir[i] = 0; break; }
         }
 
+#ifndef SLOTS_NO_STAGES
         // ---- Stage slots: stage pak first (it sits below the costume pak) ----
         slog_open(g_dll_dir);
         run_stage_loader();
+#endif
 
         // ---- Costume loader: synchronous, SEH-wrapped. Never crash the game. ----
         __try {
@@ -84,8 +96,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             // Silently swallow: the log file (if opened) holds the diagnostics.
         }
 
-        // ---- Stage slots: watcher thread only, nothing is hooked from DllMain ----
+#ifndef SLOTS_NO_STAGES
+        // ---- Stage slots: watcher thread only, nothing is hooked from DllMain. It must start
+        // here: the block near the executable it reserves is not free any more later on. ----
         stage_slots_start(g_dll_dir, &g_stage_variants);
+#endif
 
         // ---- Optional chained proxy, opt-in by file presence, off the loader lock ----
         wcscpy_s(g_chain_path, MAX_PATH, g_dll_dir);
