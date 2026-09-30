@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "stage_redirect.hpp"
-#include "third_party/minhook/include/MinHook.h"
 
 namespace {
 
@@ -230,16 +229,99 @@ uintptr_t find_path_to_hash() {
     return res.entry;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The hook itself. The entry gets a 5-byte relative jump to a relay, so the relay must sit
+// within 2 GB of the executable; late in a session that space is taken (the executable alone
+// is 600 MB), hence a small block reserved at startup, from DllMain.
+//   relay:      jmp [rip+0] -> detour
+//   trampoline: what the entry did: the jump of the tool that hooked it first (absolute), or
+//               the original 5 bytes (push rbp / push rbx / push r14) then back to entry+5.
+// The entry is 16-byte aligned: the 5 bytes are replaced by one atomic 8-byte exchange.
+// ---------------------------------------------------------------------------------------------
+
+uint8_t* g_near = nullptr;
+
+void reserve_near_block() {
+    auto base = (uintptr_t)GetModuleHandleW(nullptr);
+    auto dos = (const IMAGE_DOS_HEADER*)base;
+    auto nt = (const IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
+    uintptr_t image_end = base + nt->OptionalHeader.SizeOfImage;
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    const uintptr_t gran = si.dwAllocationGranularity;
+    const uintptr_t reach = 0x60000000;
+    const uintptr_t lowest = (uintptr_t)si.lpMinimumApplicationAddress;
+    // below the image, walking down
+    for (uintptr_t a = (base - gran) & ~(gran - 1); a > lowest && base - a < reach;) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((LPCVOID)a, &mbi, sizeof(mbi))) break;
+        if (mbi.State == MEM_FREE) {
+            void* p = VirtualAlloc((LPVOID)a, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (p) { g_near = (uint8_t*)p; return; }
+            a -= gran;
+        } else {
+            uintptr_t ab = (uintptr_t)mbi.AllocationBase;
+            if (ab < gran) break;
+            a = (ab - gran) & ~(gran - 1);
+        }
+    }
+    // above the image, walking up
+    for (uintptr_t a = (image_end + gran - 1) & ~(gran - 1); a - image_end < reach;) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((LPCVOID)a, &mbi, sizeof(mbi))) break;
+        if (mbi.State == MEM_FREE) {
+            void* p = VirtualAlloc((LPVOID)a, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (p) { g_near = (uint8_t*)p; return; }
+            a += gran;
+        } else {
+            a = ((uintptr_t)mbi.BaseAddress + mbi.RegionSize + gran - 1) & ~(gran - 1);
+        }
+    }
+}
+
+void write_abs_jmp(uint8_t* at, uintptr_t dest) {
+    at[0] = 0xFF; at[1] = 0x25;                 // jmp qword ptr [rip+0]
+    at[2] = at[3] = at[4] = at[5] = 0;
+    memcpy(at + 6, &dest, 8);
+}
+
 bool install_hook() {
     uintptr_t target = find_path_to_hash();
     if (!target) { logf("path_to_hash not found: no redirection this session"); return false; }
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) { logf("MH_Initialize: %d", (int)st); return false; }
-    st = MH_CreateHook((LPVOID)target, (LPVOID)&detour, (LPVOID*)&g_original);
-    if (st != MH_OK) { logf("MH_CreateHook: %d", (int)st); return false; }
-    st = MH_EnableHook((LPVOID)target);
-    if (st != MH_OK) { logf("MH_EnableHook: %d", (int)st); return false; }
-    logf("hook installed");
+    if (!g_near) { logf("no memory block near the executable: no redirection this session"); return false; }
+    auto entry = (uint8_t*)target;
+
+    uint64_t before = *(volatile uint64_t*)entry;
+    uint8_t* relay = g_near;
+    uint8_t* tramp = g_near + 32;
+    write_abs_jmp(relay, (uintptr_t)&detour);
+    if (entry[0] == 0xE9) {
+        int32_t rel;
+        memcpy(&rel, entry + 1, 4);
+        uintptr_t dest = target + 5 + (intptr_t)rel;
+        write_abs_jmp(tramp, dest);
+        logf("entry already hooked (jump to 0x%llx): chained", (unsigned long long)dest);
+    } else if (entry[0] == 0x40 && entry[1] == 0x55 && entry[2] == 0x53 && entry[3] == 0x41 && entry[4] == 0x56) {
+        memcpy(tramp, entry, 5);
+        write_abs_jmp(tramp + 5, target + 5);
+    } else {
+        logf("unexpected entry bytes %02X %02X %02X %02X %02X", entry[0], entry[1], entry[2], entry[3], entry[4]);
+        return false;
+    }
+    FlushInstructionCache(GetCurrentProcess(), g_near, 64);
+    g_original = (PathToHashFn)tramp;
+
+    intptr_t rel = (intptr_t)relay - (intptr_t)(target + 5);
+    if (rel > INT32_MAX || rel < INT32_MIN) { logf("relay out of reach"); return false; }
+    uint64_t after = (before & 0xFFFFFF0000000000ull) | 0xE9ull | ((uint64_t)(uint32_t)(int32_t)rel << 8);
+
+    DWORD old = 0;
+    if (!VirtualProtect(entry, 8, PAGE_EXECUTE_READWRITE, &old)) { logf("VirtualProtect failed (%lu)", GetLastError()); return false; }
+    bool ok = InterlockedCompareExchange64((volatile LONG64*)entry, (LONG64)after, (LONG64)before) == (LONG64)before;
+    VirtualProtect(entry, 8, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), entry, 8);
+    if (!ok) { logf("entry changed while hooking: not hooked"); return false; }
+    logf("hook installed (relay at 0x%llx)", (unsigned long long)(uintptr_t)relay);
     return true;
 }
 
@@ -335,6 +417,9 @@ void stage_slots_start(const wchar_t* game_dir) {
         if (_wfopen_s(&f, g_log_path, L"w") == 0 && f) fclose(f);
     }
     logf("=== SF6 Stage Slots ===");
+    reserve_near_block();
+    if (g_near) logf("near block at 0x%llx", (unsigned long long)(uintptr_t)g_near);
+    else logf("no free block near the executable");
     HANDLE t = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
     else logf("cannot start the watcher thread");

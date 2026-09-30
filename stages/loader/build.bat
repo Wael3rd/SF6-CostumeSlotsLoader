@@ -16,11 +16,10 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 if not exist ..\build\obj mkdir ..\build\obj
 set "CS=%COSTUME_SRC%"
 set CF=/nologo /std:c++17 /O2 /MT /EHa /W3 /D_CRT_SECURE_NO_WARNINGS /I"%CS%" /I"%CS%\proxy" /I"%CS%\third_party"
-set MH=third_party\minhook\src
 set SYSLIBS=bcrypt.lib advapi32.lib shell32.lib ole32.lib user32.lib
 
 echo === amd_ags_x64.dll (costume loader + stage slots) ===
-cl %CF% /Fo..\build\obj\ "%CS%\third_party\zstddeclib.c" "%CS%\third_party\miniz.c" "%CS%\pak.cpp" "%CS%\patch.cpp" "%CS%\archive.cpp" "%CS%\loader_core.cpp" stage_redirect.cpp proxy\slots_proxy.cpp %MH%\hook.c %MH%\buffer.c %MH%\trampoline.c %MH%\hde\hde64.c /LD /Fe..\build\amd_ags_x64.dll /link /INCREMENTAL:NO "%CS%\archive_deps.lib" %SYSLIBS% /MACHINE:X64
+cl %CF% /Fo..\build\obj\ "%CS%\third_party\zstddeclib.c" "%CS%\third_party\miniz.c" "%CS%\pak.cpp" "%CS%\patch.cpp" "%CS%\archive.cpp" "%CS%\loader_core.cpp" stage_redirect.cpp proxy\slots_proxy.cpp /LD /Fe..\build\amd_ags_x64.dll /link /INCREMENTAL:NO "%CS%\archive_deps.lib" %SYSLIBS% /MACHINE:X64
 if errorlevel 1 goto :failed
 
 echo.
