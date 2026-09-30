@@ -151,11 +151,50 @@ local function set_texture(tex_obj, holder)
     tex_obj:call("setTexture", holder)
 end
 
+-- Every text this script wrote: never taken for the game's own name of a stage
+local ours = {}
+
 -- The game's own name of a stage: read once the game has written it, never one of ours
 local function learn_vanilla_name(text0, stage)
     local cur = text0:call("get_Message")
-    if not cur or cur == "" or cur == scr.written[stage] then return end
+    if not cur or cur == "" or ours[cur] then return end
     scr.vanilla_name[stage] = cur
+end
+
+-- UP / DOWN hint around the name, the game's way for a value cycled with two inputs (its BGM
+-- selector shows "[A] Random [E]"): the symbols of UISelectU / UISelectD for the device in use,
+-- keys on a keyboard, directions on a pad.
+local M_SYMBOL = sdk.find_type_definition("app.InputGuideManager")
+    :get_method("GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)")
+local ID_UI_SELECT_U, ID_UI_SELECT_D = 65, 66
+local MODE_KEYBOARD = 2
+local symbols = {}                     -- guide mode -> { up, down }
+
+local function guide_mode()
+    local gm = sdk.get_managed_singleton("app.InputGuideManager")
+    local modes = gm and gm:get_field("_Modes")
+    local m = modes and modes:call("get_Item", 0)
+    if type(m) ~= "number" or m <= 0 then m = MODE_KEYBOARD end
+    return m, gm
+end
+
+local function decorate(name)
+    local mode, gm = guide_mode()
+    local s = symbols[mode]
+    if not s and gm and M_SYMBOL then
+        s = { up = tostring(M_SYMBOL:call(gm, ID_UI_SELECT_U, mode, 0, 0) or ""),
+              down = tostring(M_SYMBOL:call(gm, ID_UI_SELECT_D, mode, 0, 0) or "") }
+        symbols[mode] = s
+    end
+    if not s or (s.up == "" and s.down == "") then return name end
+    return s.up .. " " .. name .. " " .. s.down
+end
+
+local function write_name(text0, stage, name)
+    local s = decorate(name)
+    ours[s] = true
+    set_text(text0, s)
+    scr.written[stage] = s
 end
 
 -- A variant named like the stage itself (a lighting pack: "Bather's Beach") shows its bundle
@@ -167,26 +206,23 @@ local function display_name(stage, v)
     return v.name
 end
 
--- Shows the selected variant of the focused stage (or puts the game's own name/image back)
+-- Shows the selected variant of the focused stage (or puts the game's own image back), its name
+-- between the UP / DOWN hints
 local function apply(param, stage)
     local text0, tex0 = param:get_field("text0"), param:get_field("texture0")
     if not text0 or not tex0 then return end
+    learn_vanilla_name(text0, stage)
     local idx = selected_index(stage)
     if idx == 0 then
         if scr.applied[stage] then
-            if scr.vanilla_name[stage] then set_text(text0, scr.vanilla_name[stage]) end
-            scr.written[stage] = nil
             set_texture(tex0, vanilla_holder(param, stage))
             scr.applied[stage] = nil
         end
-        learn_vanilla_name(text0, stage)
+        if scr.vanilla_name[stage] then write_name(text0, stage, scr.vanilla_name[stage]) end
         return
     end
-    if not scr.applied[stage] then learn_vanilla_name(text0, stage) end
     local v = variants_of[stage][idx]
-    local name = display_name(stage, v)
-    set_text(text0, name)
-    scr.written[stage] = name
+    write_name(text0, stage, display_name(stage, v))
     if v.preview and v.preview ~= "" then set_texture(tex0, preview_holder(v.preview))
     else set_texture(tex0, vanilla_holder(param, stage)) end
     scr.applied[stage] = v.key
@@ -259,6 +295,7 @@ local function on_late_update()
     if not scr.param or not sdk.is_managed_object(scr.param) then
         scr.param = find_stage_select()
         if not scr.param then status = "stage select: flow not found"; return end
+        for k in pairs(symbols) do symbols[k] = nil end   -- key bindings may have changed
     end
     local param = scr.param
     local stage = focused_stage(param)
