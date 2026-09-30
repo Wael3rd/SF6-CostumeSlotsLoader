@@ -2,109 +2,60 @@
 
 #include <windows.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+
 #include <atomic>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "stage_log.hpp"
 #include "stage_redirect.hpp"
 
 namespace {
 
-wchar_t g_log_path[MAX_PATH];
-wchar_t g_rules_path[MAX_PATH];
+wchar_t g_state_path[MAX_PATH];
+wchar_t g_debug_path[MAX_PATH];
+const std::vector<StageVariant>* g_variants = nullptr;
 ULONGLONG g_start_tick = 0;
-CRITICAL_SECTION g_log_cs;
 
 // Nothing is hooked before this much time has passed since the game started: tools that hook
 // path_to_hash themselves (REFramework's loose file loader) find it by walking the code from
 // via.io.file.exists and give up when the entry is already a jump.
-const ULONGLONG HOOK_DELAY_MS = 30000;
+const ULONGLONG HOOK_DELAY_MS = 20000;
 const int MAX_PATH_CHARS = 1024;
-const int MAX_LOGGED_PATHS = 20000;
+const long MAX_LOGGED = 5000;
 
-std::atomic<long> g_logged_paths{0};
+std::atomic<long> g_logged{0};
 std::atomic<long long> g_calls{0};
-std::atomic<long long> g_redirects{0};
-
-void logf(const char* fmt, ...) {
-    EnterCriticalSection(&g_log_cs);
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, g_log_path, L"a") == 0 && f) {
-        SYSTEMTIME st;
-        GetLocalTime(&st);
-        fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-        va_list ap;
-        va_start(ap, fmt);
-        vfprintf(f, fmt, ap);
-        va_end(ap);
-        fputc('\n', f);
-        fclose(f);
-    }
-    LeaveCriticalSection(&g_log_cs);
-}
-
-std::string narrow(const wchar_t* w) {
-    char buf[MAX_PATH_CHARS * 3];
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, sizeof(buf), nullptr, nullptr);
-    return n > 0 ? std::string(buf) : std::string("?");
-}
-
-// ---------------------------------------------------------------------------------------------
-// Rules. Published as an immutable block through an atomic pointer; a block is never freed
-// (the detour may still be reading it), a few bytes per edit of the file.
-// ---------------------------------------------------------------------------------------------
-
-struct Rule { std::wstring from, to; };     // from: lower case
-struct Rules {
-    std::vector<Rule> redirects;
-    std::vector<std::wstring> traces;       // lower case
-};
-
-std::atomic<const Rules*> g_rules{nullptr};
-std::vector<std::unique_ptr<Rules>> g_all_rules;   // watcher thread only
+std::atomic<long long> g_served{0};
 
 inline wchar_t lower(wchar_t c) { return (c >= L'A' && c <= L'Z') ? wchar_t(c + 32) : c; }
 
-inline bool match_at(const wchar_t* s, size_t left, const std::wstring& lo) {
-    if (lo.size() > left) return false;
-    for (size_t k = 0; k < lo.size(); ++k)
-        if (lower(s[k]) != lo[k]) return false;
-    return true;
-}
-
 bool contains_ci(const wchar_t* s, size_t n, const std::wstring& lo) {
     if (lo.empty() || lo.size() > n) return false;
-    for (size_t i = 0; i + lo.size() <= n; ++i)
-        if (match_at(s + i, n - i, lo)) return true;
+    for (size_t i = 0; i + lo.size() <= n; ++i) {
+        size_t k = 0;
+        while (k < lo.size() && lower(s[i + k]) == lo[k]) ++k;
+        if (k == lo.size()) return true;
+    }
     return false;
 }
 
-// Writes the rewritten path into out. False when no rule applies (or it would not fit).
-bool apply_redirects(const Rules* r, const wchar_t* in, size_t n, wchar_t* out, size_t cap) {
-    bool changed = false;
-    size_t o = 0, i = 0;
-    while (i < n) {
-        const Rule* hit = nullptr;
-        for (const auto& ru : r->redirects)
-            if (match_at(in + i, n - i, ru.from)) { hit = &ru; break; }
-        if (hit) {
-            if (o + hit->to.size() + 1 > cap) return false;
-            memcpy(out + o, hit->to.data(), hit->to.size() * sizeof(wchar_t));
-            o += hit->to.size();
-            i += hit->from.size();
-            changed = true;
-        } else {
-            if (o + 2 > cap) return false;
-            out[o++] = in[i++];
-        }
-    }
-    out[o] = 0;
-    return changed;
-}
+// ---------------------------------------------------------------------------------------------
+// What is served. Published as an immutable block through an atomic pointer; a block is never
+// freed (the detour may still be reading it), a few KB per change of selection.
+// ---------------------------------------------------------------------------------------------
+
+struct Active {
+    std::unordered_map<uint64_t, uint64_t> map;     // vanilla hash -> hash of the variant's copy
+    std::vector<std::wstring> traces;               // lower case
+};
+
+std::atomic<const Active*> g_active{nullptr};
+std::vector<std::unique_ptr<Active>> g_all_active;  // watcher thread only
 
 // ---------------------------------------------------------------------------------------------
 // The detour
@@ -113,31 +64,25 @@ bool apply_redirects(const Rules* r, const wchar_t* in, size_t n, wchar_t* out, 
 using PathToHashFn = uint64_t (*)(const wchar_t* path);
 PathToHashFn g_original = nullptr;
 
-void log_path(const char* tag, const wchar_t* path, const wchar_t* to) {
-    if (g_logged_paths.fetch_add(1) >= MAX_LOGGED_PATHS) return;
-    if (to) logf("%s %s -> %s", tag, narrow(path).c_str(), narrow(to).c_str());
-    else    logf("%s %s", tag, narrow(path).c_str());
-}
-
 uint64_t detour(const wchar_t* path) {
+    uint64_t h = g_original(path);
     g_calls.fetch_add(1, std::memory_order_relaxed);
-    const Rules* r = g_rules.load(std::memory_order_acquire);
-    if (r == nullptr || path == nullptr) return g_original(path);
-
-    size_t n = wcsnlen(path, MAX_PATH_CHARS);
-    if (n == 0 || n >= MAX_PATH_CHARS) return g_original(path);
-
-    for (const auto& t : r->traces) {
-        if (contains_ci(path, n, t)) { log_path("trace", path, nullptr); break; }
+    const Active* a = g_active.load(std::memory_order_acquire);
+    if (a == nullptr) return h;
+    if (!a->traces.empty() && path) {
+        size_t n = wcsnlen(path, MAX_PATH_CHARS);
+        for (const auto& t : a->traces) {
+            if (contains_ci(path, n, t)) {
+                if (g_logged.fetch_add(1) < MAX_LOGGED) slog("trace %s", narrow(path).c_str());
+                break;
+            }
+        }
     }
-    if (r->redirects.empty()) return g_original(path);
-
-    wchar_t buf[MAX_PATH_CHARS + 64];
-    if (!apply_redirects(r, path, n, buf, sizeof(buf) / sizeof(buf[0]))) return g_original(path);
-
-    g_redirects.fetch_add(1, std::memory_order_relaxed);
-    log_path("redirect", path, buf);
-    return g_original(buf);
+    auto it = a->map.find(h);
+    if (it == a->map.end()) return h;
+    g_served.fetch_add(1, std::memory_order_relaxed);
+    if (path && g_logged.fetch_add(1) < MAX_LOGGED) slog("serve %s", narrow(path).c_str());
+    return it->second;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -222,9 +167,9 @@ uintptr_t find_path_to_hash() {
         if (size < 0x1000) continue;
         scan_section(base + sec[i].VirtualAddress, size, &res);
     }
-    logf("scan: %d tail(s), %d entr%s", res.tails, res.entries, res.entries == 1 ? "y" : "ies");
+    slog("scan: %d tail(s), %d entr%s", res.tails, res.entries, res.entries == 1 ? "y" : "ies");
     if (res.entries != 1) return 0;
-    logf("path_to_hash at exe+0x%llx (first byte %02X)", (unsigned long long)(res.entry - (uintptr_t)base),
+    slog("path_to_hash at exe+0x%llx (first byte %02X)", (unsigned long long)(res.entry - (uintptr_t)base),
          *(const uint8_t*)res.entry);
     return res.entry;
 }
@@ -287,8 +232,8 @@ void write_abs_jmp(uint8_t* at, uintptr_t dest) {
 
 bool install_hook() {
     uintptr_t target = find_path_to_hash();
-    if (!target) { logf("path_to_hash not found: no redirection this session"); return false; }
-    if (!g_near) { logf("no memory block near the executable: no redirection this session"); return false; }
+    if (!target) { slog("path_to_hash not found: no redirection this session"); return false; }
+    if (!g_near) { slog("no memory block near the executable: no redirection this session"); return false; }
     auto entry = (uint8_t*)target;
 
     uint64_t before = *(volatile uint64_t*)entry;
@@ -300,95 +245,140 @@ bool install_hook() {
         memcpy(&rel, entry + 1, 4);
         uintptr_t dest = target + 5 + (intptr_t)rel;
         write_abs_jmp(tramp, dest);
-        logf("entry already hooked (jump to 0x%llx): chained", (unsigned long long)dest);
+        slog("entry already hooked (jump to 0x%llx): chained", (unsigned long long)dest);
     } else if (entry[0] == 0x40 && entry[1] == 0x55 && entry[2] == 0x53 && entry[3] == 0x41 && entry[4] == 0x56) {
         memcpy(tramp, entry, 5);
         write_abs_jmp(tramp + 5, target + 5);
     } else {
-        logf("unexpected entry bytes %02X %02X %02X %02X %02X", entry[0], entry[1], entry[2], entry[3], entry[4]);
+        slog("unexpected entry bytes %02X %02X %02X %02X %02X", entry[0], entry[1], entry[2], entry[3], entry[4]);
         return false;
     }
     FlushInstructionCache(GetCurrentProcess(), g_near, 64);
     g_original = (PathToHashFn)tramp;
 
     intptr_t rel = (intptr_t)relay - (intptr_t)(target + 5);
-    if (rel > INT32_MAX || rel < INT32_MIN) { logf("relay out of reach"); return false; }
+    if (rel > INT32_MAX || rel < INT32_MIN) { slog("relay out of reach"); return false; }
     uint64_t after = (before & 0xFFFFFF0000000000ull) | 0xE9ull | ((uint64_t)(uint32_t)(int32_t)rel << 8);
 
     DWORD old = 0;
-    if (!VirtualProtect(entry, 8, PAGE_EXECUTE_READWRITE, &old)) { logf("VirtualProtect failed (%lu)", GetLastError()); return false; }
+    if (!VirtualProtect(entry, 8, PAGE_EXECUTE_READWRITE, &old)) { slog("VirtualProtect failed (%lu)", GetLastError()); return false; }
     bool ok = InterlockedCompareExchange64((volatile LONG64*)entry, (LONG64)after, (LONG64)before) == (LONG64)before;
     VirtualProtect(entry, 8, old, &old);
     FlushInstructionCache(GetCurrentProcess(), entry, 8);
-    if (!ok) { logf("entry changed while hooking: not hooked"); return false; }
-    logf("hook installed (relay at 0x%llx)", (unsigned long long)(uintptr_t)relay);
+    if (!ok) { slog("entry changed while hooking: not hooked"); return false; }
+    slog("hook installed (relay at 0x%llx)", (unsigned long long)(uintptr_t)relay);
     return true;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rules file watcher
+// Selection watcher
 // ---------------------------------------------------------------------------------------------
 
-std::wstring trim_lower(const std::wstring& s, bool lower_case) {
-    size_t a = s.find_first_not_of(L" \t\r\n");
-    size_t b = s.find_last_not_of(L" \t\r\n");
-    std::wstring r = a == std::wstring::npos ? std::wstring() : s.substr(a, b - a + 1);
-    if (lower_case) for (auto& c : r) c = lower(c);
-    return r;
-}
-
-std::unique_ptr<Rules> read_rules() {
-    auto rules = std::make_unique<Rules>();
+bool read_text(const wchar_t* path, std::string& out) {
     FILE* f = nullptr;
-    if (_wfopen_s(&f, g_rules_path, L"rb") != 0 || !f) return rules;
-    char line[2048];
-    while (fgets(line, sizeof(line), f)) {
-        wchar_t w[2048];
-        if (MultiByteToWideChar(CP_UTF8, 0, line, -1, w, 2048) <= 0) continue;
-        std::wstring s(w);
-        if (s.size() >= 1 && s[0] == 0xFEFF) s.erase(0, 1);
-        size_t eq = s.find(L'=');
-        if (eq == std::wstring::npos || s[0] == L'#') continue;
-        std::wstring key = trim_lower(s.substr(0, eq), true);
-        std::wstring val = trim_lower(s.substr(eq + 1), false);
-        if (key.empty()) continue;
-        if (key == L"trace") { if (!val.empty()) rules->traces.push_back(trim_lower(val, true)); }
-        else rules->redirects.push_back({key, val});
-    }
+    if (_wfopen_s(&f, path, L"rb") != 0 || !f) return false;
+    char buf[4096];
+    size_t n;
+    out.clear();
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
     fclose(f);
-    return rules;
+    return true;
 }
 
-void publish(std::unique_ptr<Rules> rules) {
-    const Rules* p = nullptr;
-    if (rules && (!rules->redirects.empty() || !rules->traces.empty())) {
-        p = rules.get();
-        g_all_rules.push_back(std::move(rules));
+// "selected": { "<id>": "<key>", ... } -> id/key pairs. Tolerant scan, no JSON library.
+std::vector<std::pair<uint32_t, std::string>> parse_state(const std::string& js) {
+    std::vector<std::pair<uint32_t, std::string>> out;
+    size_t sel = js.find("\"selected\"");
+    if (sel == std::string::npos) return out;
+    size_t open = js.find('{', sel), close = js.find('}', sel);
+    if (open == std::string::npos || close == std::string::npos || close < open) return out;
+    size_t i = open + 1;
+    while (i < close) {
+        size_t q1 = js.find('"', i);
+        if (q1 == std::string::npos || q1 >= close) break;
+        size_t q2 = js.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        size_t colon = js.find(':', q2);
+        if (colon == std::string::npos) break;
+        size_t v1 = js.find('"', colon);
+        if (v1 == std::string::npos) break;
+        size_t v2 = js.find('"', v1 + 1);
+        if (v2 == std::string::npos || v2 > close) break;
+        std::string id = js.substr(q1 + 1, q2 - q1 - 1), key = js.substr(v1 + 1, v2 - v1 - 1);
+        if (!id.empty() && id.find_first_not_of("0123456789") == std::string::npos && !key.empty())
+            out.push_back({ (uint32_t)strtoul(id.c_str(), nullptr, 10), key });
+        i = v2 + 1;
     }
-    g_rules.store(p, std::memory_order_release);
-    if (!p) { logf("rules: none"); return; }
-    for (const auto& r : p->redirects) logf("rule: %s -> %s", narrow(r.from.c_str()).c_str(), narrow(r.to.c_str()).c_str());
-    for (const auto& t : p->traces) logf("trace: %s", narrow(t.c_str()).c_str());
+    return out;
+}
+
+std::vector<std::wstring> read_traces() {
+    std::vector<std::wstring> out;
+    std::string text;
+    if (!read_text(g_debug_path, text)) return out;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t e = text.find('\n', pos);
+        if (e == std::string::npos) e = text.size();
+        std::string line = text.substr(pos, e - pos);
+        pos = e + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.compare(0, 6, "trace=") == 0 && line.size() > 6) {
+            std::wstring w = widen(line.substr(6));
+            for (auto& c : w) c = lower(c);
+            out.push_back(w);
+        }
+    }
+    return out;
+}
+
+void publish(const std::string& state, const std::vector<std::wstring>& traces) {
+    auto a = std::make_unique<Active>();
+    a->traces = traces;
+    for (auto& [id, key] : parse_state(state)) {
+        const StageVariant* v = nullptr;
+        for (auto& x : *g_variants) if (x.key == key && x.stage_id == id) { v = &x; break; }
+        if (!v) { slog("selection: stage %u -> %s (unknown variant, vanilla)", id, key.c_str()); continue; }
+        for (auto& r : v->redirects) a->map[r.first] = r.second;
+        slog("selection: stage %u -> %s \"%s\" (%zu files)", id, key.c_str(), v->name.c_str(), v->redirects.size());
+    }
+    if (a->map.empty() && a->traces.empty()) {
+        g_active.store(nullptr, std::memory_order_release);
+        slog("selection: vanilla everywhere");
+        return;
+    }
+    g_active.store(a.get(), std::memory_order_release);
+    g_all_active.push_back(std::move(a));
+}
+
+bool mtime_of(const wchar_t* path, FILETIME& ft) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &fa)) return false;
+    ft = fa.ftLastWriteTime;
+    return true;
 }
 
 DWORD WINAPI watcher(LPVOID) {
-    FILETIME last{};
-    bool present = false, hooked = false, gave_up = false;
+    FILETIME st_last{}, dbg_last{};
+    bool st_seen = false, dbg_seen = false, first = true, hooked = false, gave_up = false;
     long long last_calls = -1;
     ULONGLONG last_stats = 0;
     for (;;) {
-        Sleep(250);
-        WIN32_FILE_ATTRIBUTE_DATA fa;
-        bool exists = GetFileAttributesExW(g_rules_path, GetFileExInfoStandard, &fa) != 0;
-        if (!exists) {
-            if (present) { present = false; publish(nullptr); }
-        } else if (!present || CompareFileTime(&fa.ftLastWriteTime, &last) != 0) {
-            present = true;
-            last = fa.ftLastWriteTime;
-            publish(read_rules());
+        FILETIME st_ft{}, dbg_ft{};
+        bool st_now = mtime_of(g_state_path, st_ft), dbg_now = mtime_of(g_debug_path, dbg_ft);
+        bool changed = first || st_now != st_seen || dbg_now != dbg_seen ||
+                       (st_now && CompareFileTime(&st_ft, &st_last) != 0) ||
+                       (dbg_now && CompareFileTime(&dbg_ft, &dbg_last) != 0);
+        if (changed) {
+            first = false;
+            st_seen = st_now; st_last = st_ft;
+            dbg_seen = dbg_now; dbg_last = dbg_ft;
+            std::string state;
+            if (st_now) read_text(g_state_path, state);
+            publish(state, read_traces());
         }
         ULONGLONG now = GetTickCount64();
-        if (!hooked && !gave_up && g_rules.load() != nullptr && now - g_start_tick >= HOOK_DELAY_MS) {
+        if (!hooked && !gave_up && g_active.load() != nullptr && now - g_start_tick >= HOOK_DELAY_MS) {
             hooked = install_hook();
             gave_up = !hooked;
         }
@@ -397,30 +387,26 @@ DWORD WINAPI watcher(LPVOID) {
             long long c = g_calls.load();
             if (c != last_calls) {
                 last_calls = c;
-                logf("stats: %lld paths hashed, %lld redirected", c, g_redirects.load());
+                slog("stats: %lld paths hashed, %lld served from a variant", c, g_served.load());
             }
         }
+        Sleep(250);
     }
 }
 
 } // namespace
 
-void stage_slots_start(const wchar_t* game_dir) {
+void stage_slots_start(const wchar_t* game_dir, const std::vector<StageVariant>* variants) {
     g_start_tick = GetTickCount64();
-    InitializeCriticalSection(&g_log_cs);
-    wcscpy_s(g_log_path, game_dir);
-    wcscat_s(g_log_path, L"\\SF6_StageSlots.log");
-    wcscpy_s(g_rules_path, game_dir);
-    wcscat_s(g_rules_path, L"\\reframework\\data\\SF6_StageSlots_Data\\redirect.txt");
-    {
-        FILE* f = nullptr;   // fresh log each launch
-        if (_wfopen_s(&f, g_log_path, L"w") == 0 && f) fclose(f);
-    }
-    logf("=== SF6 Stage Slots ===");
+    g_variants = variants;
+    wcscpy_s(g_state_path, game_dir);
+    wcscat_s(g_state_path, L"\\reframework\\data\\SF6_StageSlots_Data\\state.json");
+    wcscpy_s(g_debug_path, game_dir);
+    wcscat_s(g_debug_path, L"\\reframework\\data\\SF6_StageSlots_Data\\debug.txt");
     reserve_near_block();
-    if (g_near) logf("near block at 0x%llx", (unsigned long long)(uintptr_t)g_near);
-    else logf("no free block near the executable");
+    if (g_near) slog("near block at 0x%llx", (unsigned long long)(uintptr_t)g_near);
+    else slog("no free block near the executable: no redirection this session");
     HANDLE t = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
-    else logf("cannot start the watcher thread");
+    else slog("cannot start the watcher thread");
 }

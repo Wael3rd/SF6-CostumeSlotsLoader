@@ -1,22 +1,15 @@
 // SF6 AMD AGS proxy: Costume Slot Loader + Stage Slots
 // ------------------------------------------------------
-// Same as the costume loader's proxy (amd_ags_proxy.cpp), plus one call: stage_slots_start,
-// which only starts a watcher thread (see stage_redirect.hpp). Built from the costume loader's
-// sources, unchanged.
+// The costume loader's proxy (amd_ags_proxy.cpp, built from its sources, unchanged) with the
+// stage slots around it. The game imports amd_ags_x64.dll from its own folder, so this DLL is
+// mapped before any engine code runs: the right moment to rebuild the paks.
 //
-// SF6 AMD AGS proxy + Costume Slot Loader
-// -----------------------------------------
-// The game imports amd_ags_x64.dll from its own folder, so this DLL is mapped before any
-// engine code runs: the right moment to rebuild the costume pak.
-//
-// DllMain: (1) costume_loader_run synchronously (SEH-wrapped)
-//          (2) if amd_ags_x64_chain.dll exists next to us, load it from a thread
+// DllMain: (1) stage_loader_run: stage pak, right above the mod paks (SEH-wrapped)
+//          (2) costume_loader_run: costume pak, above the stage pak (SEH-wrapped)
+//          (3) stage_slots_start: reserves a small block near the executable and starts the
+//              watcher thread that hooks path_to_hash once a stage variant is selected
+//          (4) if amd_ags_x64_chain.dll exists next to us, load it from a thread
 // All AGS exports are forwarded to amd_ags_x64_real.dll via linker directives: no AGS code here.
-//
-// This DLL contains the costume loader and nothing else: no hooks, no UI, no scripting,
-// no third-party module hardcoded. Its only imports are kernel32 and bcrypt (hashing for the
-// "did the mods change" fingerprint). Anything else that wants this entry point goes through
-// amd_ags_x64_chain.dll, which is loaded only if the file is there.
 //
 // Chaining another tool that also wants amd_ags_x64.dll (HARD READ, MatchScout, ...):
 //   its  amd_ags_x64.dll  -> rename to  amd_ags_x64_chain.dll
@@ -26,6 +19,8 @@
 #include <stdio.h>
 #include "ags_forwarders.h"
 #include "loader_core.hpp"
+#include "../stage_loader.hpp"
+#include "../stage_log.hpp"
 #include "../stage_redirect.hpp"
 
 // Tell loader_core that we are NOT the exe (suppress stdout output).
@@ -35,6 +30,7 @@ static const wchar_t* CHAIN_NAME = L"amd_ags_x64_chain.dll";
 
 static wchar_t g_chain_path[MAX_PATH];
 static wchar_t g_dll_dir[MAX_PATH];
+static std::vector<StageVariant> g_stage_variants;     // read by the watcher for the whole session
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible
 // in support logs. Runs on its own thread, after DllMain returned.
@@ -49,6 +45,15 @@ static void chain_log(const wchar_t* path, bool ok) {
     if (WideCharToMultiByte(CP_UTF8, 0, path, -1, mod, sizeof(mod), nullptr, nullptr) <= 0) mod[0] = 0;
     fprintf(f, "  chain: %s %s\n", mod, ok ? "loaded" : "FAILED");
     fclose(f);
+}
+
+static void run_stage_loader() {
+    __try {
+        stage_loader_run(g_dll_dir, g_stage_variants);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        slog("stage loader: unexpected fault, stages left as they were");
+    }
 }
 
 static DWORD WINAPI load_chain(LPVOID) {
@@ -67,6 +72,10 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             if (g_dll_dir[i] == L'\\' || g_dll_dir[i] == L'/') { g_dll_dir[i] = 0; break; }
         }
 
+        // ---- Stage slots: stage pak first (it sits below the costume pak) ----
+        slog_open(g_dll_dir);
+        run_stage_loader();
+
         // ---- Costume loader: synchronous, SEH-wrapped. Never crash the game. ----
         __try {
             costume_loader_run(g_dll_dir, nullptr);
@@ -76,7 +85,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         }
 
         // ---- Stage slots: watcher thread only, nothing is hooked from DllMain ----
-        stage_slots_start(g_dll_dir);
+        stage_slots_start(g_dll_dir, &g_stage_variants);
 
         // ---- Optional chained proxy, opt-in by file presence, off the loader lock ----
         wcscpy_s(g_chain_path, MAX_PATH, g_dll_dir);

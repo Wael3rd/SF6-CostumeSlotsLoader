@@ -19,7 +19,7 @@ set CF=/nologo /std:c++17 /O2 /MT /EHa /W3 /D_CRT_SECURE_NO_WARNINGS /I"%CS%" /I
 set SYSLIBS=bcrypt.lib advapi32.lib shell32.lib ole32.lib user32.lib
 
 echo === amd_ags_x64.dll (costume loader + stage slots) ===
-cl %CF% /Fo..\build\obj\ "%CS%\third_party\zstddeclib.c" "%CS%\third_party\miniz.c" "%CS%\pak.cpp" "%CS%\patch.cpp" "%CS%\archive.cpp" "%CS%\loader_core.cpp" stage_redirect.cpp proxy\slots_proxy.cpp /LD /Fe..\build\amd_ags_x64.dll /link /INCREMENTAL:NO "%CS%\archive_deps.lib" %SYSLIBS% /MACHINE:X64
+cl %CF% /Fo..\build\obj\ "%CS%\third_party\zstddeclib.c" "%CS%\third_party\miniz.c" "%CS%\pak.cpp" "%CS%\patch.cpp" "%CS%\archive.cpp" "%CS%\loader_core.cpp" stage_log.cpp stage_loader.cpp preview_tex.cpp stage_redirect.cpp proxy\slots_proxy.cpp /LD /Fe..\build\amd_ags_x64.dll /link /INCREMENTAL:NO "%CS%\archive_deps.lib" %SYSLIBS% /MACHINE:X64
 if errorlevel 1 goto :failed
 
 echo.
