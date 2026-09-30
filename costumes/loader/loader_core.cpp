@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-30-addonparts2";
+static const char* LOADER_BUILD_ID = "2026-09-30-havokcloth";
 
 // ============================================================================
 // Utility
@@ -2032,6 +2032,70 @@ static void add_slot_files(PakWriter& writer,
             written_paths.insert(cu_target);
             count++; patched++;
         }
+
+        // Same for Havok cloth: a mod that ships the cloth of a part (<fd>_<old>_<part>.havokcloth,
+        // relocated dir-only above) is simulated through <fd>_<old>_<part>_havok.user, which names the
+        // cloth. The slot gets its own copy (the mod's, else the game's) pointing at the relocated
+        // cloth, and the scene follows it. Without it the slot kept the game's cloth on the mod's mesh
+        // (Lily Kenyan Summer C2: cloth of Outfit 2 on another body, and no weapons).
+        std::set<std::string> havok_parts;
+        const std::string hpfx = fd + "_" + old_f + "_";
+        for (auto& [path, mf] : mc->files_in_folder) {
+            std::string fl = str_lower(path);
+            auto fsl = fl.rfind('/');
+            std::string fn = (fsl != std::string::npos) ? fl.substr(fsl + 1) : fl;
+            auto hc = fn.find(".havokcloth.");
+            if (hc == std::string::npos || fn.compare(0, hpfx.size(), hpfx) != 0 || hc <= hpfx.size()) continue;
+            std::string mfd, mfolder;
+            if (!parse_model_folder(path, mfd, mfolder) || mfolder != old_f) continue;
+            havok_parts.insert(fn.substr(hpfx.size(), hc - hpfx.size()));
+        }
+        // A reference of the copy points at the slot when the relocated file was written
+        auto relocated_written = [&](const std::string& ref) {
+            std::string target = scene_ref_pak_path(ref, inv.suffixes);
+            if (!target.empty()) return written_paths.count(target) > 0;
+            std::string pfx = "natives/stm/" + str_lower(ref) + ".";   // suffix not in the index (.havokcloth.1.x64)
+            for (auto& w : written_paths) if (w.compare(0, pfx.size(), pfx) == 0) return true;
+            return false;
+        };
+        for (auto& part : havok_parts) {
+            std::string hu_orig = base_model + hpfx + part + "_havok.user.2";
+            std::string hu_target = hu_orig;
+            { auto p = hu_target.find(fd + "/" + old_f + "/");
+              if (p != std::string::npos) hu_target.replace(p, (fd + "/" + old_f + "/").size(), fd + "/" + new_f + "/"); }
+            if (written_paths.count(hu_target)) continue;
+            std::vector<uint8_t> hu_data;
+            auto mfit = mc->files_in_folder.find(hu_orig);
+            if (mfit != mc->files_in_folder.end()) hu_data = mfit->second.read_data();
+            else if (auto* oe = base_pak.find(pak_path_hash(std::string_view(hu_orig)))) hu_data = base_pak.read(*oe);
+            if (hu_data.empty()) continue;
+            std::string old_ds = fd + "/" + old_f + "/", new_ds = fd + "/" + new_f + "/";
+            std::vector<uint8_t> old_d16, new_d16;
+            for (char c : old_ds) { old_d16.push_back((uint8_t)c); old_d16.push_back(0); }
+            for (char c : new_ds) { new_d16.push_back((uint8_t)c); new_d16.push_back(0); }
+            size_t repointed = 0;
+            for (size_t ci = 0; ci + old_d16.size() <= hu_data.size(); ) {
+                bool eq = true;
+                for (size_t k = 0; k < old_d16.size(); k += 2)
+                    if (tolower(hu_data[ci + k]) != old_d16[k] || hu_data[ci + k + 1] != 0) { eq = false; break; }
+                if (!eq) { ci += 2; continue; }
+                size_t s0 = ci;
+                while (s0 >= 2 && !(hu_data[s0 - 2] == 0 && hu_data[s0 - 1] == 0)) s0 -= 2;
+                std::string ref;
+                for (size_t j = s0; j + 1 < hu_data.size() && (hu_data[j] || hu_data[j + 1]); j += 2)
+                    ref += (char)hu_data[j];
+                ref.replace((ci - s0) / 2, old_ds.size(), new_ds);
+                while (!ref.empty() && (ref[0] == '@' || ref[0] == ' ')) ref.erase(0, 1);
+                if (relocated_written(ref)) { memcpy(hu_data.data() + ci, new_d16.data(), new_d16.size()); repointed++; }
+                ci += old_d16.size();
+            }
+            if (!repointed) continue;   // the cloth did not follow: the game's file stays in use
+            writer.add_uncompressed(pak_path_hash(std::string_view(hu_target)), std::move(hu_data));
+            written_paths.insert(hu_target);
+            count++; patched++;
+            printf("      havok cloth of part %s: the mod's, through its own copy of %s_havok.user\n",
+                   part.c_str(), (hpfx + part).c_str());
+        }
     }
 
     // ---- Phase 1c: Relocate mod-provided 000/ shared files ----
@@ -2225,8 +2289,18 @@ static void add_slot_files(PakWriter& writer,
                         if (wc == 0) break;
                         ws += (char)tolower(wc & 0xFF);
                     }
-                    if (ws.find("chain.chain") != std::string::npos ||
-                        ws.find("havok") != std::string::npos) {
+                    // The weather chain has no folder of its own, hence the renamed stem. A havok file
+                    // in the model folder keeps its name (dir-only, pass 1): renaming it here gave
+                    // <old>/<fd>_<new>_NN_havok.user, a file that exists nowhere.
+                    bool in_weather = false;
+                    if (ws.find("havok") != std::string::npos) {
+                        size_t s0 = wi;
+                        while (s0 >= 2 && !(vdata[s0 - 2] == 0 && vdata[s0 - 1] == 0)) s0 -= 2;
+                        std::string full;
+                        for (size_t wj = s0; wj < wi; wj += 2) full += (char)tolower(vdata[wj]);
+                        in_weather = full.find("weather/") != std::string::npos;
+                    }
+                    if (ws.find("chain.chain") != std::string::npos || in_weather) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
                         patched++;
                     }
