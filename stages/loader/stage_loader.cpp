@@ -15,6 +15,7 @@
 
 #include "archive.hpp"
 #include "pak.hpp"
+#include "patch.hpp"          // texture_mip_check, shared with the costume loader
 #include "preview_tex.hpp"
 #include "stage_loader.hpp"
 #include "stage_log.hpp"
@@ -23,8 +24,9 @@ namespace {
 
 const char* STAGE_MARKER = STAGE_SLOTS_MARKER;
 const char* COSTUME_MARKER = COSTUME_SLOTS_MARKER;
-// Part of the fingerprint: bump it when the pak layout or the preview conversion changes.
-const char* FORMAT_VERSION = "stageslots-3";
+// Part of the fingerprint: bump it when the pak layout, the preview conversion or the checks of the
+// mods' files change.
+const char* FORMAT_VERSION = "stageslots-4";
 const char* TEX_SUFFIX = ".tex.241101895";
 
 // ---------------------------------------------------------------------------------------------
@@ -365,6 +367,40 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
     }
 }
 
+// A texture whose mip table is inconsistent never finishes loading, and every screen that shows it
+// waits for it forever: Stage Lighting Overhaul's Training Room previews (1920x480, 9 levels, the
+// last three declared with fractional-block row pitches) hung the game on its way to the Fighting
+// Ground menu, which loads Training Room's pictures, whenever one of them was selected (reproduced,
+// then gone with the repair, 2026-10-02). Repaired the way the costume loader
+// repairs costume textures; a texture that stays inconsistent is left out of the option, so the
+// game's own file is served in its place.
+void check_textures(Option& opt) {
+    int repaired = 0, dropped = 0;
+    for (size_t i = 0; i < opt.files.size();) {
+        OptFile& f = opt.files[i];
+        const int comp = int(f.attrib & 0xFF);
+        std::vector<uint8_t> plain = comp ? pak_decompress(f.data, comp, f.dsize) : f.data;
+        if (plain.size() < 4 || memcmp(plain.data(), "TEX\0", 4) != 0) { ++i; continue; }
+        int fixed = 0;
+        int bad = texture_mip_check(plain, true, &fixed);
+        if (bad) {
+            opt.files.erase(opt.files.begin() + i);
+            ++dropped;
+            continue;
+        }
+        if (fixed) {
+            f.dsize = (int64_t)plain.size();
+            f.data = std::move(plain);
+            f.attrib = 0;
+            ++repaired;
+        }
+        ++i;
+    }
+    if (repaired) slog("  %s: %d texture(s) with a wrong mip table, repaired", opt.rel.c_str(), repaired);
+    if (dropped) slog("  %s: %d texture(s) with a mip table that cannot be repaired, left out (the game's own is used)",
+                      opt.rel.c_str(), dropped);
+}
+
 struct Source { std::wstring name, path; bool dir; ArchiveKind archive; uint64_t size, mtime; };
 
 std::vector<Source> list_sources(const std::wstring& mods_dir) {
@@ -570,6 +606,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     PakWriter writer;
     std::vector<StageVariant> vars;
     for (auto& opt : options) {
+        check_textures(opt);
         std::map<std::string, std::vector<size_t>> by_ess;
         std::vector<size_t> shared;
         for (size_t i = 0; i < opt.files.size(); ++i) {
