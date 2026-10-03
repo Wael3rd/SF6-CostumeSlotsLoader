@@ -186,7 +186,7 @@ bool kpka_index(FILE* f, std::vector<KpkaEntry>& out) {
 // ---------------------------------------------------------------------------------------------
 
 enum class PakKind { Mod, Stage, Costume };
-struct PatchPak { int num; std::wstring path; PakKind kind; };
+struct PatchPak { int num; std::wstring path; PakKind kind; size_t entries; };
 
 std::wstring patch_path(const std::wstring& game_dir, int num) {
     wchar_t b[64];
@@ -204,10 +204,12 @@ std::vector<PatchPak> classify_patch_paks(const std::wstring& game_dir) {
         if (num <= 0) continue;
         std::wstring p = game_dir + L"\\" + e.name;
         PakKind kind = PakKind::Mod;
+        size_t entries = 0;
         FILE* f = nullptr;
         if (_wfopen_s(&f, p.c_str(), L"rb") == 0 && f) {
             std::vector<KpkaEntry> idx;
             if (kpka_index(f, idx)) {
+                entries = idx.size();
                 for (auto& k : idx) {
                     if (k.hash == stage_h) { kind = PakKind::Stage; break; }
                     if (k.hash == costume_h) { kind = PakKind::Costume; break; }
@@ -215,7 +217,7 @@ std::vector<PatchPak> classify_patch_paks(const std::wstring& game_dir) {
             }
             fclose(f);
         }
-        out.push_back({ num, p, kind });
+        out.push_back({ num, p, kind, entries });
     }
     std::sort(out.begin(), out.end(), [](const PatchPak& a, const PatchPak& b) { return a.num < b.num; });
     return out;
@@ -459,7 +461,7 @@ bool unpack_archive(const Source& s, const std::wstring& cache_root, std::wstrin
 // Saved table (variants.tsv)
 // ---------------------------------------------------------------------------------------------
 
-bool load_table(const std::wstring& path, std::string& fingerprint, std::vector<StageVariant>& out) {
+bool load_table(const std::wstring& path, std::string& fingerprint, size_t& pak_entries, std::vector<StageVariant>& out) {
     std::vector<uint8_t> data;
     if (!read_file(path, data)) return false;
     std::string text(data.begin(), data.end());
@@ -479,6 +481,7 @@ bool load_table(const std::wstring& path, std::string& fingerprint, std::vector<
             a = t + 1;
         }
         if (f[0] == "#fingerprint" && f.size() >= 2) fingerprint = f[1];
+        else if (f[0] == "#pak" && f.size() >= 2) pak_entries = static_cast<size_t>(strtoull(f[1].c_str(), nullptr, 10));
         else if (f[0] == "V" && f.size() >= 8) {
             StageVariant v;
             v.key = f[1];
@@ -500,8 +503,8 @@ bool load_table(const std::wstring& path, std::string& fingerprint, std::vector<
     return !fingerprint.empty();
 }
 
-bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, const std::vector<StageVariant>& vars) {
-    std::string tsv = "#fingerprint\t" + fingerprint + "\n";
+bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, size_t pak_entries, const std::vector<StageVariant>& vars) {
+    std::string tsv = "#fingerprint\t" + fingerprint + "\n#pak\t" + std::to_string(pak_entries) + "\n";
     for (auto& v : vars) {
         tsv += "V\t" + v.key + "\t" + std::to_string(v.stage_id) + "\t" + v.ess + "\t" + (v.has_preview ? "1" : "0") + "\t" +
                tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" + tsv_clean(v.bundle) + "\n";
@@ -563,13 +566,17 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     const std::wstring target_path = patch_path(game_dir, target);
     slog("%zu source(s) in stage_mods, mod paks up to patch_%03d, stage pak goes to patch_%03d", sources.size(), max_mod, target);
 
-    // Nothing changed: the saved table is the answer.
+    // Nothing changed: the saved table is the answer. The pak must be the one the table was saved
+    // with (its entry count): a pak rewritten since for other mods, under a table put back, held
+    // none of the variants' files and the stage never finished loading (03/10).
     {
         std::string saved_fp;
+        size_t saved_entries = 0;
         std::vector<StageVariant> saved;
-        if (load_table(table_path, saved_fp, saved) && saved_fp == fp) {
+        if (load_table(table_path, saved_fp, saved_entries, saved) && saved_fp == fp) {
             bool pak_ok = saved.empty() ? stage_paks.empty()
-                                        : (stage_paks.size() == 1 && stage_paks[0].num == target);
+                                        : (stage_paks.size() == 1 && stage_paks[0].num == target
+                                           && stage_paks[0].entries == saved_entries);
             if (pak_ok) {
                 out = std::move(saved);
                 slog("up to date: %zu variant(s), %.1f ms", out.size(), ms());
@@ -665,6 +672,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         }
         slog("  removed old pak %s", narrow(leaf(p.path)).c_str());
     }
+    size_t pak_entries = 0;
     if (!vars.empty()) {
         if (file_exists(target_path)) {
             std::wstring up = patch_path(game_dir, target + 1);
@@ -684,8 +692,9 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
             return;
         }
         slog("  wrote %s (%zu entries)", narrow(leaf(target_path)).c_str(), writer.entry_count());
+        pak_entries = writer.entry_count();
     }
-    if (!save_outputs(data_dir, fp, vars)) slog("ERROR: cannot write the registry");
+    if (!save_outputs(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the registry");
     out = std::move(vars);
     slog("built: %zu variant(s) from %zu option(s), %.1f ms", out.size(), options.size(), ms());
 }
